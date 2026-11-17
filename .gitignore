@@ -1,0 +1,16 @@
+# Dependências instaladas
+node_modules/
+
+# Build do Next.js
+.next/
+out/
+
+# Node portátil (pode apagar depois de instalar o Node oficial)
+.nodejs/
+
+# Arquivos de ambiente locais
+.env*.local
+
+# Arquivos de sistema
+.DS_Store
+Thumbs.db
