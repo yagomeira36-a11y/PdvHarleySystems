@@ -11,12 +11,15 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",
+    "leaflet": "^1.9.4",
     "next": "14.2.15",
     "qz-tray": "^2.2.5",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
+    "@types/leaflet": "^1.9.22",
     "@types/node": "^20.14.0",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",

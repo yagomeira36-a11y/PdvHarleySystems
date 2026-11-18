@@ -83,12 +83,12 @@ async function testesTransporte() {
   await service.imprimirDadosQz({ ...dados, teste: true }, config);
   assert.deepEqual(store, before);
   evento({ printerName: 'Térmica 80', eventType: 'PRINTER', severity: 'FATAL', statusText: 'OFFLINE' });
-  await assert.rejects(service.imprimirDadosQz({ ...dados, teste: true }, config), /OFFLINE/);
+  await assert.rejects(service.imprimirDadosQz({ ...dados, teste: true }, config), /Impressora não encontrada, verifique se o QZ Tray está aberto/);
   evento({ printerName: 'Térmica 80', eventType: 'PRINTER', severity: 'INFO', statusText: 'OK' });
   const antesFalha = jobs.length;
   failPrint = impressaoNumero + 2;
   const outro = { ...dados, pedido: { ...dados.pedido, id: 'pedido-parcial' } };
-  await assert.rejects(service.imprimirDadosQz(outro, { ...config, impressoraCozinha: 'Cozinha' }, ['comprovante', 'comanda'], true), /Já enviado: comprovante/);
+  await assert.rejects(service.imprimirDadosQz(outro, { ...config, impressoraCozinha: 'Cozinha' }, ['comprovante', 'comanda'], true), /Impressora não encontrada, verifique se o QZ Tray está aberto/);
   assert.equal(jobs.length, antesFalha + 2);
   const registro = JSON.parse(store.get(service.chaveRegistroImpressao(loja, outro.pedido.id)));
   assert.equal(registro.comprovante.estado, 'enviado');
@@ -111,7 +111,7 @@ async function testesTransporte() {
   escpos.montarEscPos = () => new Uint8Array();
   try { await assert.rejects(service.imprimirDadosQz({ ...dados, teste: true }, config), /Cupom vazio/); }
   finally { escpos.montarEscPos = montar; }
-  await assert.rejects(service.imprimirDadosQz({ ...dados, teste: true }, { ...config, impressoraCliente: 'Termica 80mm Teste' }), /Microsoft Print To PDF/);
+  await assert.rejects(service.imprimirDadosQz({ ...dados, teste: true }, { ...config, impressoraCliente: 'Termica 80mm Teste' }), /Impressora não encontrada, verifique se o QZ Tray está aberto/);
   assert.equal(jobs.length, antesBloqueios);
   assert.match(service.problemaImpressora('Termica 80mm Teste'), /0 bytes/);
   const mensagem = await service.imprimirDadosQz({ ...dados, teste: true }, { ...config, impressoraCliente: 'Termica Texto', impressoraCozinha: 'Termica Texto' });

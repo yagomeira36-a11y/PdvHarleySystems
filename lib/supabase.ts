@@ -1,5 +1,5 @@
 // Cliente do Supabase (conexão com o banco de dados)
-import { createClient, SupabaseClient } from "@supabase/supabase-js";
+import { createClient, SupabaseClient } from "@supabase/supabase-js/dist/index.cjs";
 
 // URL e chave pública do Supabase (vêm do arquivo .env.local)
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -13,15 +13,7 @@ export function getSupabase(): SupabaseClient | null {
   if (!supabaseUrl || !supabaseKey) return null;
   if (!supabaseUrl.startsWith("https://") || supabaseUrl.includes("SEU-PROJETO")) return null;
   if (!client) {
-    client = createClient(supabaseUrl, supabaseKey, {
-      global: {
-        // Sem isto o Next.js guarda as respostas do Supabase no cache de dados
-        // (Data Cache) e o servidor passa a ler dados velhos — ex: a loja
-        // continua aparecendo "sem assinatura" depois de gerar a cobrança.
-        // Forçamos sempre buscar a versão atual no banco.
-        fetch: (input, init) => fetch(input, { ...init, cache: "no-store" }),
-      },
-    });
+    client = createClient(supabaseUrl, supabaseKey);
   }
   return client;
 }
@@ -42,6 +34,8 @@ export type Product = {
   price: number;
   category: Categoria;
   image_url: string | null;
+  description?: string | null;
+  available?: boolean;
   code: number;
   cost?: number; // custo de produção (para calcular o lucro)
   created_at?: string;
@@ -61,14 +55,28 @@ export type Order = {
   mesa_numero?: number | null; // número da mesa (pedidos tipo 'mesa')
   forma_pagamento?: string | null; // forma de pagamento (dinheiro, pix...)
   numero_pedido?: number | null;
+  observacao?: string | null;
+  items?: Array<{
+    product_id: string;
+    name: string;
+    qty: number;
+    price: number;
+    observacao: string | null;
+  }>;
   created_at: string;
 };
 
-export function rotuloPedido(pedido: Pick<Order, "numero_pedido">): string {
+export function rotuloPedido(
+  pedido: Pick<Order, "numero_pedido"> & { customer_name?: string | null }
+): string {
   const numero = Number(pedido.numero_pedido);
-  return Number.isSafeInteger(numero) && numero > 0
-    ? `Pedido ${numero}`
-    : "Pedido sem número";
+  const base =
+    Number.isSafeInteger(numero) && numero > 0
+      ? `Pedido ${numero}`
+      : "Pedido sem número";
+  // Junta o nome do cliente ao número: "Pedido 1 - caroline"
+  const nome = (pedido.customer_name ?? "").trim();
+  return nome ? `${base} - ${nome}` : base;
 }
 
 // Item de pedido (tabela "order_items")
@@ -80,6 +88,7 @@ export type OrderItem = {
   price: number;
   cost: number; // custo congelado no momento da venda
   observacao?: string | null; // observação do cliente no item
+  product_name?: string;
 };
 
 // Motoboy (tabela "motoboys")
@@ -109,6 +118,9 @@ export type Configuracao = {
   telefone: string | null;
   endereco: string | null;
   taxa_entrega_padrao: number;
+  whatsapp?: string | null;
+  logo_url?: string | null;
+  cardapio_aberto?: boolean;
   updated_at?: string;
 };
 

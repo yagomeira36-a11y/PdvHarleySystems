@@ -7,7 +7,7 @@
 // - observações dos itens em destaque (âmbar)
 // - botão "Preparado" para marcar o pedido como pago
 // ============================================================
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getSupabase, getSessao, formatarMoeda, rotuloPedido, Order, OrderItem } from "@/lib/supabase";
 import { caixaEstaAberto, MENSAGEM_CAIXA_FECHADO } from "@/lib/caixa";
 
@@ -24,6 +24,7 @@ export default function Kds({
   const [itens, setItens] = useState<OrderItem[]>([]);
   const [carregando, setCarregando] = useState(true);
   const [mensagem, setMensagem] = useState<string | null>(null);
+  const carregamentoInicial = useRef(true);
 
   // ============================================================
   // CARREGAR PEDIDOS PENDENTES + ITENS
@@ -33,18 +34,25 @@ export default function Kds({
       setCarregando(false);
       return;
     }
-    setCarregando(true);
+    if (carregamentoInicial.current) setCarregando(true);
     const sessao = getSessao();
     if (!sessao) {
       setCarregando(false);
+      carregamentoInicial.current = false;
       return;
     }
-    const { data: peds } = await supabase
+    const { data: peds, error } = await supabase
       .from("orders")
       .select("*")
-      .in("status", ["pendente"])
+      .in("status", ["pendente", "novo"])
       .eq("loja_id", sessao.id)
       .order("created_at", { ascending: true });
+    if (error) {
+      setMensagem("Erro ao carregar pedidos: " + error.message);
+      setCarregando(false);
+      carregamentoInicial.current = false;
+      return;
+    }
     const lista = (peds || []) as Order[];
     setPedidos(lista);
 
@@ -59,10 +67,15 @@ export default function Kds({
       setItens([]);
     }
     setCarregando(false);
+    carregamentoInicial.current = false;
   }
 
   useEffect(() => {
-    carregar();
+    void carregar();
+    const intervalo = window.setInterval(() => {
+      if (document.visibilityState === "visible") void carregar();
+    }, 3000);
+    return () => window.clearInterval(intervalo);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshKey]);
 
@@ -157,12 +170,31 @@ export default function Kds({
               <span className="text-sm text-gray-500">
                 {formatarHora(pedido.created_at)}
               </span>
+              {pedido.status === "novo" && (
+                <span className="rounded-full bg-red-100 px-2 py-1 text-[10px] font-black text-red-700">
+                  NOVO
+                </span>
+              )}
             </div>
 
             {/* Cliente (delivery) */}
-            {pedido.type === "delivery" && pedido.customer_name && (
+            {pedido.customer_name && (
               <p className="text-sm text-gray-600 -mt-1">
                 Cliente: <b>{pedido.customer_name}</b>
+              </p>
+            )}
+            {pedido.type === "delivery" && pedido.address && (
+              <p className="text-sm text-gray-600 -mt-1">
+                Endereço: <b>{pedido.address}</b>
+                {pedido.complemento ? ` · ${pedido.complemento}` : ""}
+              </p>
+            )}
+            {pedido.forma_pagamento && (
+              <p className="text-xs text-gray-500 -mt-1">Pagamento: {pedido.forma_pagamento}</p>
+            )}
+            {pedido.observacao && (
+              <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                Observação: {pedido.observacao}
               </p>
             )}
 
@@ -175,15 +207,24 @@ export default function Kds({
 
             {/* Itens a preparar */}
             <ul className="space-y-2 flex-1">
-              {itensDoPedido(pedido.id).map((item) => (
+              {(pedido.items?.length
+                ? pedido.items.map((item, index) => ({
+                    id: `${pedido.id}-item-${index}`,
+                    product_id: item.product_id,
+                    qty: item.qty,
+                    price: item.price,
+                    cost: 0,
+                    observacao: item.observacao,
+                    product_name: item.name,
+                  }))
+                : itensDoPedido(pedido.id)
+              ).map((item) => (
                 <li
                   key={item.id}
                   className="flex items-start justify-between gap-2 bg-gray-50 rounded-lg px-3 py-2"
                 >
                   <div>
-                    <p className="text-sm font-bold">
-                      {item.qty}x Item {item.product_id ? "" : "(removido)"}
-                    </p>
+                    <p className="text-sm font-bold">{item.qty}x {item.product_name || "Item"}{!item.product_id ? " (removido)" : ""}</p>
                     {item.observacao && (
                       <p className="text-xs text-amber-600 italic font-semibold">
                         Obs: {item.observacao}
@@ -195,7 +236,7 @@ export default function Kds({
                   </span>
                 </li>
               ))}
-              {itensDoPedido(pedido.id).length === 0 && (
+              {(pedido.items?.length || itensDoPedido(pedido.id).length) === 0 && (
                 <li className="text-sm text-gray-400 text-center py-3">
                   Sem itens registrados.
                 </li>

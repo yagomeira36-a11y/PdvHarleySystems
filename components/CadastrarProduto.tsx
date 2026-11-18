@@ -15,6 +15,7 @@ import {
   Categoria,
 } from "@/lib/supabase";
 import { CATEGORIAS_PADRAO, lerCategorias } from "@/lib/categorias";
+import { ItemFoto, lerCardapioDaFoto } from "@/lib/cardapio-foto";
 
 // Campos do formulário (texto para facilitar a digitação)
 type FormProduto = {
@@ -22,6 +23,17 @@ type FormProduto = {
   preco: string;
   categoria: Categoria;
   codigo: string;
+  descricao: string;
+  disponivel: boolean;
+};
+
+// Item lido da foto, em revisão antes de salvar
+type ItemRevisao = {
+  nome: string;
+  preco: string;
+  codigo: string;
+  categoria: Categoria;
+  incluir: boolean;
 };
 
 // Formulário vazio (estado inicial)
@@ -30,6 +42,8 @@ const FORM_VAZIO: FormProduto = {
   preco: "",
   categoria: "HAMBÚRGUER",
   codigo: "",
+  descricao: "",
+  disponivel: true,
 };
 
 export default function CadastrarProduto() {
@@ -43,6 +57,13 @@ export default function CadastrarProduto() {
   const [mensagem, setMensagem] = useState<string | null>(null);
   // Categorias da loja (lista livre, criadas no balcão)
   const [categorias, setCategorias] = useState<string[]>(CATEGORIAS_PADRAO);
+
+  // Importar cardápio por foto (OCR no navegador)
+  const [fotoUrl, setFotoUrl] = useState<string | null>(null); // prévia da imagem
+  const [lendoFoto, setLendoFoto] = useState(false); // OCR em andamento
+  const [progressoFoto, setProgressoFoto] = useState(0); // 0 a 100
+  const [itensRevisao, setItensRevisao] = useState<ItemRevisao[]>([]);
+  const [importando, setImportando] = useState(false);
 
   // ============================================================
   // CARREGAR PRODUTOS
@@ -89,6 +110,8 @@ export default function CadastrarProduto() {
       price: parseFloat(form.preco.replace(",", ".")) || 0,
       category: form.categoria,
       code: parseInt(form.codigo) || 0,
+      description: form.descricao.trim(),
+      available: form.disponivel,
       loja_id: sessao.id,
     };
 
@@ -164,6 +187,8 @@ export default function CadastrarProduto() {
       preco: String(p.price),
       categoria: p.category,
       codigo: String(p.code),
+      descricao: p.description || "",
+      disponivel: p.available !== false,
     });
     setMensagem(null);
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -190,6 +215,141 @@ export default function CadastrarProduto() {
       return;
     }
     setMensagem("Produto excluído.");
+    carregar();
+  }
+
+  // ============================================================
+  // IMPORTAR CARDÁPIO POR FOTO
+  // 1) Lê a foto (OCR) -> 2) revisão/ajuste -> 3) salva no banco
+  // ============================================================
+
+  // Escolheu uma foto: mostra a prévia e começa a leitura
+  function escolherFoto(e: React.ChangeEvent<HTMLInputElement>) {
+    const arquivo = e.target.files?.[0];
+    e.target.value = ""; // permite escolher a mesma foto de novo
+    if (!arquivo) return;
+    if (fotoUrl) URL.revokeObjectURL(fotoUrl);
+    setFotoUrl(URL.createObjectURL(arquivo));
+    setItensRevisao([]);
+    setMensagem(null);
+    void lerFoto(arquivo);
+  }
+
+  // Roda o OCR e monta a lista para revisão
+  async function lerFoto(arquivo: File) {
+    setLendoFoto(true);
+    setProgressoFoto(0);
+    try {
+      const itens: ItemFoto[] = await lerCardapioDaFoto(arquivo, setProgressoFoto);
+      if (itens.length === 0) {
+        setMensagem(
+          "Não encontrei itens com preço nessa foto. Tente uma imagem mais nítida e reta."
+        );
+        return;
+      }
+      // Códigos seguem depois do maior código já cadastrado
+      let proximo = Math.max(0, ...produtos.map((p) => Number(p.code) || 0)) + 1;
+      setItensRevisao(
+        itens.map((it) => ({
+          nome: it.nome,
+          preco: it.preco.toFixed(2).replace(".", ","),
+          codigo: String(proximo++),
+          categoria: form.categoria,
+          incluir: true,
+        }))
+      );
+      setMensagem(
+        `Encontrei ${itens.length} itens. Confira e ajuste antes de importar.`
+      );
+    } catch (erro) {
+      setMensagem(
+        "Erro ao ler a foto: " +
+          (erro instanceof Error ? erro.message : String(erro))
+      );
+    } finally {
+      setLendoFoto(false);
+    }
+  }
+
+  // Altera um campo de um item da revisão
+  function alterarItem(index: number, dados: Partial<ItemRevisao>) {
+    setItensRevisao((lista) =>
+      lista.map((it, i) => (i === index ? { ...it, ...dados } : it))
+    );
+  }
+
+  // Descarta a foto e a lista em revisão
+  function limparFoto() {
+    if (fotoUrl) URL.revokeObjectURL(fotoUrl);
+    setFotoUrl(null);
+    setItensRevisao([]);
+    setProgressoFoto(0);
+  }
+
+  // Insere vários produtos de uma vez (com o mesmo plano B do cadastro:
+  // tabela antiga com colunas em português)
+  async function inserirProdutos(
+    lista: { name: string; price: number; category: string; code: number }[]
+  ): Promise<string | null> {
+    if (!supabase) return "Sem conexão com o banco.";
+    const sessao = getSessao();
+    if (!sessao) return "Sessão expirada. Entre novamente.";
+    const base = lista.map((d) => ({ ...d, loja_id: sessao.id }));
+    const completo = base.map((d) => ({
+      ...d,
+      nome: d.name,
+      preco: d.price,
+      codigo: d.code,
+    }));
+
+    const primeira = await supabase.from("products").insert(completo);
+    if (!primeira.error) return null;
+    if (primeira.error.message.includes("categoria_produto")) {
+      return "Uma das categorias não existe no banco. No SQL Editor do Supabase, rode supabase/categorias-livres.sql e tente de novo.";
+    }
+    if (primeira.error.message.includes("Could not find the")) {
+      const segunda = await supabase.from("products").insert(base);
+      if (!segunda.error) return null;
+      return "Erro ao importar: " + segunda.error.message;
+    }
+    return "Erro ao importar: " + primeira.error.message;
+  }
+
+  // Salva os itens marcados na revisão
+  async function importarSelecionados() {
+    const marcados = itensRevisao.filter((i) => i.incluir);
+    if (marcados.length === 0) {
+      setMensagem("Marque pelo menos um item para importar.");
+      return;
+    }
+    const lista = marcados.map((i) => ({
+      name: i.nome.trim(),
+      price: parseFloat(i.preco.replace(",", ".")) || 0,
+      category: i.categoria,
+      code: parseInt(i.codigo) || 0,
+    }));
+    if (lista.some((d) => !d.name)) {
+      setMensagem("Todo item precisa de um nome.");
+      return;
+    }
+    if (lista.some((d) => !d.code)) {
+      setMensagem("Todo item precisa de um código.");
+      return;
+    }
+    if (new Set(lista.map((d) => d.code)).size !== lista.length) {
+      setMensagem("Há códigos repetidos na lista. Ajuste antes de importar.");
+      return;
+    }
+
+    setImportando(true);
+    const erro = await inserirProdutos(lista);
+    setImportando(false);
+    if (erro) {
+      setMensagem(erro);
+      return;
+    }
+    setMensagem(`${lista.length} produto(s) importados!`);
+    limparFoto();
     carregar();
   }
 
@@ -267,6 +427,25 @@ export default function CadastrarProduto() {
               ))}
             </select>
           </div>
+          <div className="md:col-span-2">
+            <label className="block text-xs text-gray-400 mb-1">Descrição do cardápio digital</label>
+            <input
+              type="text"
+              placeholder="Ex: Hambúrguer artesanal, queijo e molho da casa"
+              value={form.descricao}
+              onChange={(e) => setForm({ ...form, descricao: e.target.value })}
+              className={inputClasse}
+            />
+          </div>
+          <label className="flex items-center gap-2 text-sm font-semibold md:self-end pb-2">
+            <input
+              type="checkbox"
+              checked={form.disponivel}
+              onChange={(e) => setForm({ ...form, disponivel: e.target.checked })}
+              className="h-4 w-4"
+            />
+            Disponível no cardápio digital
+          </label>
           <div className="md:col-span-3 flex gap-2">
             <button
               type="submit"
@@ -285,6 +464,156 @@ export default function CadastrarProduto() {
             )}
           </div>
         </form>
+      </div>
+
+      {/* ================= IMPORTAR CARDÁPIO POR FOTO ================= */}
+      <div className="bg-white rounded-xl p-4 mb-6">
+        <h2 className="font-bold mb-1">Importar cardápio por foto</h2>
+        <p className="text-xs text-gray-500 mb-3">
+          Tire uma foto (ou escolha uma imagem) do seu cardápio. O sistema lê os
+          itens com nome e preço no próprio computador e mostra tudo para você
+          revisar antes de salvar.
+        </p>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="bg-blue-600 hover:bg-blue-700 text-white font-bold px-4 py-2 rounded-lg cursor-pointer transition">
+            📷 Escolher foto
+            <input
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={escolherFoto}
+            />
+          </label>
+          {lendoFoto && (
+            <span className="text-sm text-gray-600">
+              Lendo a foto… {progressoFoto}%
+            </span>
+          )}
+          {(fotoUrl || itensRevisao.length > 0) && !lendoFoto && (
+            <button
+              type="button"
+              onClick={limparFoto}
+              className="text-sm text-gray-500 hover:text-gray-700 underline"
+            >
+              Limpar
+            </button>
+          )}
+        </div>
+
+        {lendoFoto && (
+          <div className="mt-3 h-2 w-full bg-gray-200 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-blue-600 transition-all"
+              style={{ width: `${progressoFoto}%` }}
+            />
+          </div>
+        )}
+
+        {fotoUrl && (
+          <img
+            src={fotoUrl}
+            alt="Foto do cardápio"
+            className="mt-3 max-h-64 rounded-lg border border-gray-200"
+          />
+        )}
+
+        {itensRevisao.length > 0 && (
+          <div className="mt-4">
+            <p className="text-sm font-semibold mb-2">
+              Revise os itens lidos antes de importar:
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-100 text-gray-600 text-left">
+                  <tr>
+                    <th className="px-2 py-2 w-10 text-center">OK</th>
+                    <th className="px-2 py-2">Nome</th>
+                    <th className="px-2 py-2 w-28">Preço (R$)</th>
+                    <th className="px-2 py-2 w-24">Código</th>
+                    <th className="px-2 py-2 w-40">Categoria</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-200">
+                  {itensRevisao.map((it, i) => (
+                    <tr key={i} className={it.incluir ? "" : "opacity-50"}>
+                      <td className="px-2 py-1.5 text-center">
+                        <input
+                          type="checkbox"
+                          checked={it.incluir}
+                          onChange={(e) =>
+                            alterarItem(i, { incluir: e.target.checked })
+                          }
+                        />
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <input
+                          type="text"
+                          value={it.nome}
+                          onChange={(e) =>
+                            alterarItem(i, { nome: e.target.value })
+                          }
+                          className={inputClasse}
+                        />
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={it.preco}
+                          onChange={(e) =>
+                            alterarItem(i, { preco: e.target.value })
+                          }
+                          className={inputClasse}
+                        />
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <input
+                          type="number"
+                          value={it.codigo}
+                          onChange={(e) =>
+                            alterarItem(i, { codigo: e.target.value })
+                          }
+                          className={inputClasse}
+                        />
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <select
+                          value={it.categoria}
+                          onChange={(e) =>
+                            alterarItem(i, {
+                              categoria: e.target.value as Categoria,
+                            })
+                          }
+                          className={inputClasse}
+                        >
+                          {(categorias.includes(it.categoria)
+                            ? categorias
+                            : [...categorias, it.categoria]
+                          ).map((c) => (
+                            <option key={c} value={c}>
+                              {c}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <button
+              type="button"
+              onClick={importarSelecionados}
+              disabled={importando}
+              className="mt-3 bg-green-600 hover:bg-green-700 font-bold px-6 py-2 rounded-lg transition disabled:opacity-50"
+            >
+              {importando
+                ? "Importando…"
+                : `Importar ${itensRevisao.filter((i) => i.incluir).length} produto(s)`}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* ================= TABELA DE PRODUTOS ================= */}
@@ -327,6 +656,21 @@ export default function CadastrarProduto() {
                   {formatarMoeda(Number(p.price))}
                 </td>
                 <td className="px-4 py-2 text-center whitespace-nowrap">
+                  <button
+                    onClick={async () => {
+                      if (!supabase) return;
+                      const novoDisponivel = p.available === false;
+                      const { error } = await supabase.from("products").update({ available: novoDisponivel }).eq("id", p.id);
+                      if (error) setMensagem("Erro ao atualizar disponibilidade: " + error.message);
+                      else {
+                        setMensagem(novoDisponivel ? "Produto disponível no cardápio!" : "Produto pausado no cardápio!");
+                        carregar();
+                      }
+                    }}
+                    className={`font-semibold px-2 ${p.available === false ? "text-green-600 hover:text-green-700" : "text-orange-600 hover:text-orange-700"}`}
+                  >
+                    {p.available === false ? "Ativar" : "Pausar"}
+                  </button>
                   <button
                     onClick={() => editar(p)}
                     className="text-blue-600 hover:text-blue-700 font-semibold px-2"

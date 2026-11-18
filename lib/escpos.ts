@@ -212,11 +212,13 @@ export function montarEscPos(
     : "BALCÃO";
   escrever(modalidade, true);
   const numeroPedido = Number(pedido.numero_pedido);
-  escrever(dados.teste
+  const tituloPedido = dados.teste
     ? "Pedido: TESTE"
     : Number.isSafeInteger(numeroPedido) && numeroPedido > 0
       ? `Pedido ${numeroPedido}`
-      : "Pedido sem número");
+      : "Pedido sem número";
+  const nomeCliente = pedido.customer_name ? limparTexto(pedido.customer_name).trim() : "";
+  escrever(nomeCliente && !dados.teste ? `${tituloPedido} - ${nomeCliente}` : tituloPedido);
   escrever("Data: " + data.toLocaleString("pt-BR"));
   if (pedido.customer_name) escrever("Cliente: " + limparTexto(pedido.customer_name));
   if (pedido.telefone) escrever("Telefone: " + limparTexto(pedido.telefone));

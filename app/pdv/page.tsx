@@ -9,14 +9,12 @@
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import LayoutMenu, { ItemAtivo } from "@/components/LayoutMenu";
-import Balcao, { ItemCarrinho } from "@/components/Balcao";
+import Balcao from "@/components/Balcao";
 import Delivery from "@/components/Delivery";
-import Motoboys from "@/components/Motoboys";
+import GerenciamentoLoja from "@/components/GerenciamentoLoja";
 import Configuracoes from "@/components/Configuracoes";
-import LayoutConfig from "@/components/LayoutConfig";
 import CadastrarProduto from "@/components/CadastrarProduto";
 import Estoque from "@/components/Estoque";
-import BotAssistente from "@/components/BotAssistente";
 import Kds from "@/components/Kds";
 import PedidosFinalizados from "@/components/PedidosFinalizados";
 import TelaCaixa from "@/components/Caixa";
@@ -26,16 +24,14 @@ import Relatorios from "@/components/Relatorios";
 const ABAS_VALIDAS: ItemAtivo[] = [
   "balcao",
   "delivery",
-  "motoboys",
   "kds",
   "finalizados",
+  "gerenciamento",
+  "configuracoes",
   "cadastrar",
   "estoque",
-  "bot",
   "caixa",
   "relatorios",
-  "configuracoes",
-  "layout",
 ];
 
 function ConteudoPDV() {
@@ -54,10 +50,6 @@ function ConteudoPDV() {
     );
   }, [pedida]);
 
-  // Estado global do carrinho (mantido ao trocar de seção)
-  const [carrinho, setCarrinho] = useState<ItemCarrinho[]>([]);
-  // Cliente (input da lateral do balcão)
-  const [cliente, setCliente] = useState("");
   // Mensagem flutuante (toast)
   const [aviso, setAviso] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
   // Incrementado a cada pedido criado -> recarrega as outras telas
@@ -94,19 +86,10 @@ function ConteudoPDV() {
   return (
     <LayoutMenu ativo={aba} refreshKey={refreshKey}>
       {/* Conteúdo conforme a seção ativa */}
-      {aba === "balcao" && (
-        <Balcao
-          carrinho={carrinho}
-          setCarrinho={setCarrinho}
-          cliente={cliente}
-          setCliente={setCliente}
-          aoPedidoCriado={aoPedidoCriado}
-        />
-      )}
+      {aba === "balcao" && <Balcao aoPedidoCriado={aoPedidoCriado} />}
       {aba === "delivery" && (
         <Delivery refreshKey={refreshKey} aoPedidoCriado={aoPedidoCriado} />
       )}
-      {aba === "motoboys" && <Motoboys refreshKey={refreshKey} />}
       {aba === "kds" && (
         <Kds refreshKey={refreshKey} aoPedidoCriado={aoPedidoCriado} />
       )}
@@ -116,13 +99,16 @@ function ConteudoPDV() {
           aoPedidoCriado={aoPedidoCriado}
         />
       )}
+      {aba === "gerenciamento" && (
+        <GerenciamentoLoja refreshKey={refreshKey} />
+      )}
       {aba === "cadastrar" && <CadastrarProduto />}
       {aba === "estoque" && <Estoque />}
-      {aba === "bot" && <BotAssistente />}
       {aba === "caixa" && <TelaCaixa refreshKey={refreshKey} />}
       {aba === "relatorios" && <Relatorios refreshKey={refreshKey} />}
-      {aba === "configuracoes" && <Configuracoes refreshKey={refreshKey} />}
-      {aba === "layout" && <LayoutConfig aoPedidoCriado={aoPedidoCriado} />}
+      {aba === "configuracoes" && (
+        <Configuracoes refreshKey={refreshKey} aoPedidoCriado={aoPedidoCriado} />
+      )}
 
       {/* Toast flutuante (sucesso verde / erro vermelho) */}
       {aviso && (

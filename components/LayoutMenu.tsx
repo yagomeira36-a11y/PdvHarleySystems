@@ -4,12 +4,15 @@
 // LAYOUT COMPARTILHADO PdvDaGalera (usado por todas as páginas)
 // - Sidebar azul com gradiente #2563EB -> #1D4ED8
 // - Logo "PdvDaGalera" + box do administrador
-// - Menu: Mesa, Balcão, Delivery, KDS, Motoboys,
-//   Cadastrar Produto, Caixa, Relatórios, Configurações
+// - Menu: Mesa, Balcão, Delivery, KDS, Finalizados,
+//   Gerenciamento de loja e Configurações
+//   (Cadastrar Produto, Estoque, Caixa e Relatórios ficam dentro de
+//   "Gerenciamento de loja"; Layout, Motoboys e Bot Assistente dentro
+//   de "Configurações")
 // - Botões ABERTO e CARDÁPIO no rodapé da sidebar
 // - Área principal clara com o conteúdo da página
 // ============================================================
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { getSupabase, getSessao, limparSessao, Sessao } from "@/lib/supabase";
@@ -17,26 +20,52 @@ import { lojaSemAcesso } from "@/lib/acesso-loja";
 import { caixaEstaAberto, chaveCaixas, MENSAGEM_CAIXA_FECHADO } from "@/lib/caixa";
 import {
   LayoutConfig,
+  MenuGrupo,
+  MenuId,
   lerLayout,
   escurecer,
+  definicaoMenu,
+  menusOrdenados,
+  ROTULO_GRUPO,
   TAMANHO_FONTE,
 } from "@/lib/layout";
 
+function tocarSomPedidoNovo() {
+  try {
+    const audio = new window.AudioContext();
+    const oscillator = audio.createOscillator();
+    const volume = audio.createGain();
+    oscillator.type = "sine";
+    oscillator.frequency.setValueAtTime(880, audio.currentTime);
+    oscillator.frequency.setValueAtTime(660, audio.currentTime + 0.16);
+    volume.gain.setValueAtTime(0.001, audio.currentTime);
+    volume.gain.exponentialRampToValueAtTime(0.18, audio.currentTime + 0.02);
+    volume.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + 0.38);
+    oscillator.connect(volume);
+    volume.connect(audio.destination);
+    oscillator.start();
+    oscillator.stop(audio.currentTime + 0.4);
+    window.setTimeout(() => { void audio.close(); }, 600);
+  } catch (error) {
+    console.warn("Não foi possível reproduzir o som de pedido novo:", error);
+  }
+}
+
 // Seções do menu reconhecidas para destacar o item ativo
+// (cadastrar/estoque/caixa/relatorios continuam válidos como aba do PDV,
+// mas agora são abertos por dentro de "Gerenciamento de loja")
 export type ItemAtivo =
   | "mesa"
   | "balcao"
   | "delivery"
   | "kds"
   | "finalizados"
-  | "motoboys"
+  | "gerenciamento"
+  | "configuracoes"
   | "cadastrar"
   | "estoque"
-  | "bot"
   | "caixa"
-  | "relatorios"
-  | "configuracoes"
-  | "layout";
+  | "relatorios";
 
 // ============================================================
 // ÍCONES DO MENU (traço fino, cor atual)
@@ -85,43 +114,13 @@ function IconeFinalizado() {
     </svg>
   );
 }
-function IconeMotoboy() {
+function IconeGerenciamento() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M5 17a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
-      <path d="M19 17a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
-      <path d="M5 14 9 7h4l1.5 4" />
-      <path d="m12 5 3-2" />
-      <circle cx="7.5" cy="7" r="0.6" fill="currentColor" />
-    </svg>
-  );
-}
-function IconeProduto() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" />
-      <path d="m3.3 7 8.7 5 8.7-5" />
-      <path d="M12 22V12" />
-    </svg>
-  );
-}
-function IconeEstoque() {
-  return (
-    <svg width="18" height="18" className="shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M3 3v18M21 3v18M3 11h18M3 21h18" />
-      <rect x="6" y="3" width="5" height="8" rx="1" />
-      <rect x="13" y="14" width="5" height="7" rx="1" />
-      <path d="M8 16h2" />
-    </svg>
-  );
-}
-function IconeBot() {
-  return (
-    <svg width="18" height="18" className="shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="4" y="7" width="16" height="13" rx="3" />
-      <path d="M12 7V3M10 3h4M2 11v5M22 11v5M9 16h6" />
-      <circle cx="9" cy="12" r="1" />
-      <circle cx="15" cy="12" r="1" />
+      <path d="M3 9l1.5-5h15L21 9" />
+      <path d="M3 9a3 3 0 0 0 6 0 3 3 0 0 0 6 0 3 3 0 0 0 6 0" />
+      <path d="M4 12v8h16v-8" />
+      <path d="M9 20v-5h6v5" />
     </svg>
   );
 }
@@ -133,36 +132,6 @@ function IconeConfig() {
     </svg>
   );
 }
-function IconeLayout() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="13.5" cy="6.5" r=".5" fill="currentColor" />
-      <circle cx="17.5" cy="10.5" r=".5" fill="currentColor" />
-      <circle cx="8.5" cy="7.5" r=".5" fill="currentColor" />
-      <circle cx="6.5" cy="12.5" r=".5" fill="currentColor" />
-      <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z" />
-    </svg>
-  );
-}
-function IconeCaixa() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <rect width="20" height="12" x="2" y="6" rx="2" />
-      <circle cx="12" cy="12" r="2" />
-      <path d="M6 12h.01M18 12h.01" />
-    </svg>
-  );
-}
-function IconeRelatorio() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M3 3v16a2 2 0 0 0 2 2h16" />
-      <path d="M7 16v-4" />
-      <path d="M12 16V8" />
-      <path d="M17 16v-6" />
-    </svg>
-  );
-}
 
 // Classe padrão dos itens do menu (a cor vem da configuração de layout)
 const ITEM_MENU =
@@ -171,6 +140,83 @@ const ITEM_MENU_ATIVO =
   "flex items-center gap-2.5 w-full text-left px-2.5 py-2 rounded-lg text-sm font-bold bg-white/25 border border-white/30 shadow-[inset_0_2px_4px_rgba(0,0,0,0.3)] transition";
 
 const FUNCOES_PEDIDOS: ItemAtivo[] = ["mesa", "balcao", "delivery", "kds", "finalizados"];
+
+// ============================================================
+// DADOS DE CADA MENU (ícone e destino)
+// A ORDEM e a VISIBILIDADE vêm da tela Layout > Menus
+// ============================================================
+const ICONES_MENU: Record<MenuId, React.ReactNode> = {
+  mesa: <IconeCadeira />,
+  balcao: <IconeBalcao />,
+  delivery: <IconeDelivery />,
+  kds: <IconeKds />,
+  finalizados: <IconeFinalizado />,
+  gerenciamento: <IconeGerenciamento />,
+  configuracoes: <IconeConfig />,
+};
+
+const HREF_MENU: Record<MenuId, string> = {
+  mesa: "/mesas",
+  balcao: "/pdv?aba=balcao",
+  delivery: "/pdv?aba=delivery",
+  kds: "/pdv?aba=kds",
+  finalizados: "/pdv?aba=finalizados",
+  gerenciamento: "/pdv?aba=gerenciamento",
+  configuracoes: "/pdv?aba=configuracoes",
+};
+
+// Chave onde guardamos se a sidebar está recolhida (por loja)
+function chaveSidebar(lojaId: string): string {
+  return `pdv_sidebar_mini_${lojaId}`;
+}
+
+// ============================================================
+// ITEM DO MENU
+// - Normal: ícone + texto (+ badge opcional)
+// - Sidebar recolhida: só o ícone, com o nome no title (tooltip)
+// ============================================================
+function ItemMenu({
+  href,
+  icone,
+  rotulo,
+  ativo,
+  minimizada,
+  badge,
+  bloqueio,
+}: {
+  href: string;
+  icone: React.ReactNode;
+  rotulo: string;
+  ativo: boolean;
+  minimizada: boolean;
+  badge?: number | null;
+  bloqueio?: React.AnchorHTMLAttributes<HTMLAnchorElement>;
+}) {
+  return (
+    <Link
+      href={href}
+      {...bloqueio}
+      title={minimizada ? rotulo : undefined}
+      className={`${ativo ? ITEM_MENU_ATIVO : ITEM_MENU} ${
+        minimizada ? "relative justify-center" : ""
+      }`}
+    >
+      {icone}
+      {!minimizada && <span className="flex-1 truncate">{rotulo}</span>}
+      {badge != null && badge > 0 && (
+        <span
+          className={
+            minimizada
+              ? "absolute top-0.5 right-1 bg-red-500 text-white text-[9px] font-bold rounded-full min-w-[15px] h-[15px] px-0.5 flex items-center justify-center"
+              : "bg-red-500 text-white text-[10px] font-bold rounded-full min-w-[18px] h-[18px] px-1 flex items-center justify-center"
+          }
+        >
+          {badge}
+        </span>
+      )}
+    </Link>
+  );
+}
 
 type Props = {
   ativo: ItemAtivo; // item do menu destacado
@@ -194,10 +240,14 @@ export default function LayoutMenu({ ativo, children, refreshKey = 0 }: Props) {
 
   // Pedidos pendentes na cozinha (badge do item "KDS (Cozinha)")
   const [pendentes, setPendentes] = useState<number>(0);
+  const pedidosAtivosRef = useRef<Set<string> | null>(null);
   const [caixaLiberado, setCaixaLiberado] = useState(false);
 
   // Cardápio aberto (imagem configurada na tela Layout)
   const [cardapioAberto, setCardapioAberto] = useState(false);
+
+  // Sidebar recolhida (vira uma faixa fina só com ícones)
+  const [minimizada, setMinimizada] = useState(false);
 
   // Fecha o cardápio com a tecla ESC
   useEffect(() => {
@@ -242,6 +292,17 @@ export default function LayoutMenu({ ativo, children, refreshKey = 0 }: Props) {
     style: caixaLiberado ? undefined : { opacity: 0.45, cursor: "not-allowed" },
   };
 
+  // Menus do lateral (visibilidade e ordem escolhidas em Layout > Menus)
+  const menus = menusOrdenados(layout?.menus);
+
+  // Recolhe/expande a sidebar e guarda a escolha no navegador da loja
+  function alternarMiniatura() {
+    const novo = !minimizada;
+    setMinimizada(novo);
+    const s = getSessao();
+    if (s) localStorage.setItem(chaveSidebar(s.id), novo ? "1" : "0");
+  }
+
   // ============================================================
   // APLICAR O LAYOUT CONFIGURADO PELO DONO (cor, letras, tamanho)
   // ============================================================
@@ -264,11 +325,16 @@ export default function LayoutMenu({ ativo, children, refreshKey = 0 }: Props) {
     const s = getSessao();
     setSessao(s);
 
+    // Restaura se a sidebar estava recolhida na última visita
+    if (s) setMinimizada(localStorage.getItem(chaveSidebar(s.id)) === "1");
+
     const supabase = getSupabase();
     if (!supabase || !s) {
       setOcupadas(4);
       return;
     }
+    const db = supabase;
+    const lojaId = s.id;
 
     // Revalida o status da loja: se venceu, ficou vencida ou bloqueada,
     // manda para a tela de pagamento do Asaas (mantém a sessão para cobrar)
@@ -287,7 +353,7 @@ export default function LayoutMenu({ ativo, children, refreshKey = 0 }: Props) {
     supabase
       .from("mesas")
       .select("status")
-      .eq("loja_id", s.id)
+      .eq("loja_id", lojaId)
       .then(({ data, error }) => {
         if (error || !data || data.length === 0) {
           setOcupadas(4); // tabela ainda não existe -> padrão do layout
@@ -299,19 +365,30 @@ export default function LayoutMenu({ ativo, children, refreshKey = 0 }: Props) {
         }
       });
 
-    // Pedidos pendentes da cozinha (badge do item "KDS")
-    supabase
-      .from("orders")
-      .select("id")
-      .eq("loja_id", s.id)
-      .eq("status", "pendente")
-      .then(({ data, error }) => {
-        if (error || !data) {
-          setPendentes(0);
-        } else {
-          setPendentes(data.length);
-        }
-      });
+    let ativo = true;
+    async function atualizarPedidos() {
+      const { data, error } = await db
+        .from("orders")
+        .select("id")
+        .eq("loja_id", lojaId)
+        .in("status", ["pendente", "novo"]);
+      if (!ativo || error || !data) return;
+      const idsAtivos = new Set(data.map((pedido) => String(pedido.id)));
+      const anteriores = pedidosAtivosRef.current;
+      if (anteriores && Array.from(idsAtivos).some((id) => !anteriores.has(id)) && document.visibilityState === "visible") {
+        tocarSomPedidoNovo();
+      }
+      pedidosAtivosRef.current = idsAtivos;
+      setPendentes(idsAtivos.size);
+    }
+    void atualizarPedidos();
+    const intervaloPedidos = window.setInterval(() => {
+      if (document.visibilityState === "visible") void atualizarPedidos();
+    }, 3000);
+    return () => {
+      ativo = false;
+      window.clearInterval(intervaloPedidos);
+    };
   }, [router, refreshKey]);
 
   return (
@@ -330,7 +407,9 @@ export default function LayoutMenu({ ativo, children, refreshKey = 0 }: Props) {
     >
       {/* ================= SIDEBAR (cor configurada pelo dono) ================= */}
       <aside
-        className="w-64 shrink-0 h-full flex flex-col"
+        className={`${
+          minimizada ? "w-[68px]" : "w-64"
+        } shrink-0 h-full flex flex-col transition-[width] duration-200 overflow-hidden`}
         style={{
           background: `linear-gradient(to bottom, rgba(255,255,255,0.22), rgba(255,255,255,0) 22%), linear-gradient(to bottom, ${
             layout?.cor ?? "#2563EB"
@@ -340,26 +419,67 @@ export default function LayoutMenu({ ativo, children, refreshKey = 0 }: Props) {
             "inset 0 2px 0 rgba(255,255,255,0.35), 8px 0 24px rgba(0,0,0,0.25)",
         }}
       >
-        {/* Logo (balão cinza com PdvDG em 3D) */}
-        <div className="p-5 pb-4">
-          <div className="relative inline-block">
-            <div className="bg-gradient-to-b from-gray-400 to-gray-600 rounded-2xl px-5 py-2 shadow-[0_4px_10px_rgba(0,0,0,0.3),inset_0_2px_3px_rgba(255,255,255,0.35)] border border-white/40">
-              <p
-                className="text-2xl font-black italic tracking-wider text-white leading-none"
-                style={{
-                  textShadow:
-                    "1px 1px 0 #4b5563, 2px 2px 0 #374151, 3px 3px 0 #1f2937, 4px 4px 8px rgba(0,0,0,0.45)",
-                }}
+        {/* Ícone padrão até o dono escolher uma imagem no Layout */}
+        <div className={minimizada ? "px-2 py-3" : "p-5 pb-4"}>
+          <div
+            className={`flex items-center ${
+              minimizada ? "justify-center" : "justify-between"
+            }`}
+          >
+            {layout?.logo ? (
+              // Ícone que o dono escolheu no Layout
+              <img
+                src={layout.logo}
+                alt={sessao?.nome_loja ?? "Ícone da loja"}
+                title={minimizada ? sessao?.nome_loja ?? "Loja" : undefined}
+                className={`object-cover border border-white/40 shadow-[0_4px_10px_rgba(0,0,0,0.3)] shrink-0 ${
+                  minimizada ? "h-10 w-10 rounded-xl" : "h-16 w-32 rounded-xl"
+                }`}
+              />
+            ) : (
+              !minimizada && (
+                <div className="relative inline-block">
+                  <div className="bg-gradient-to-b from-gray-400 to-gray-600 rounded-2xl px-5 py-2 shadow-[0_4px_10px_rgba(0,0,0,0.3),inset_0_2px_3px_rgba(255,255,255,0.35)] border border-white/40">
+                    <p
+                      className="max-w-40 text-center text-sm font-black leading-tight text-white"
+                      style={{
+                        textShadow:
+                          "1px 1px 0 #4b5563, 2px 2px 0 #374151, 3px 3px 0 #1f2937, 4px 4px 8px rgba(0,0,0,0.45)",
+                      }}
+                    >
+                      Escolha seu ícone no layout
+                    </p>
+                  </div>
+                  <div className="absolute -bottom-1.5 left-8 w-3 h-3 bg-gray-600 rotate-45 rounded-sm" />
+                </div>
+              )
+            )}
+            <button
+              onClick={alternarMiniatura}
+              title={minimizada ? "Expandir menu" : "Recolher menu"}
+              className="w-7 h-7 shrink-0 rounded-lg bg-white/15 hover:bg-white/25 border border-white/25 flex items-center justify-center transition"
+            >
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
               >
-                PdvDG
-              </p>
-            </div>
-            <div className="absolute -bottom-1.5 left-8 w-3 h-3 bg-gray-600 rotate-45 rounded-sm" />
+                <path d={minimizada ? "m9 18 6-6-6-6" : "m15 18-6-6 6-6"} />
+              </svg>
+            </button>
           </div>
-          <p className="text-xs opacity-70 mt-3">Ponto de Venda Da Galera</p>
+          {!minimizada && (
+            <p className="text-xs opacity-70 mt-3">Ponto de Venda Da Galera</p>
+          )}
         </div>
 
         {/* Box do administrador (amarelo) */}
+        {!minimizada && (
         <div className="mx-4 bg-gradient-to-b from-gray-400 to-gray-600 rounded-xl p-3 flex items-center gap-2 shadow-[0_4px_10px_rgba(0,0,0,0.3),inset_0_2px_3px_rgba(255,255,255,0.35)] border border-white/40">
           {layout?.logo ? (
             <img
@@ -396,147 +516,62 @@ export default function LayoutMenu({ ativo, children, refreshKey = 0 }: Props) {
             SAIR
           </button>
         </div>
+        )}
 
         {/* Menu */}
-        <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-5">
-          {/* Seção Painel de Pedidos */}
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-widest opacity-80 px-2 mb-1.5 [text-shadow:0_1px_2px_rgba(0,0,0,0.5)]">
-              Painel de Pedidos
-            </p>
-            <div className="space-y-1">
-              <Link
-                href="/mesas"
-                {...bloqueioMenu}
-                className={ativo === "mesa" ? ITEM_MENU_ATIVO : ITEM_MENU}
-              >
-                <IconeCadeira />
-                <span className="flex-1">Mesa</span>
-                {ocupadas !== null && ocupadas > 0 && (
-                  <span className="bg-red-500 text-white text-[10px] font-bold rounded-full min-w-[18px] h-[18px] px-1 flex items-center justify-center">
-                    {ocupadas}
-                  </span>
+        <nav
+          className={`flex-1 overflow-y-auto py-4 space-y-5 ${
+            minimizada ? "px-2" : "px-3"
+          }`}
+        >
+          {/* Seções do menu — ordem e itens vêm de Layout > Menus */}
+          {(["pedidos", "gerenciamento"] as MenuGrupo[]).map((grupo) => {
+            const itens = menus
+              .filter((m) => m.visivel && definicaoMenu(m.id).grupo === grupo)
+              .map((m) => definicaoMenu(m.id));
+            if (itens.length === 0) return null;
+            return (
+              <div key={grupo}>
+                {!minimizada && (
+                  <p className="text-[10px] font-bold uppercase tracking-widest opacity-80 px-2 mb-1.5 [text-shadow:0_1px_2px_rgba(0,0,0,0.5)]">
+                    {ROTULO_GRUPO[grupo]}
+                  </p>
                 )}
-              </Link>
-              <Link
-                href="/pdv?aba=balcao"
-                {...bloqueioMenu}
-                className={ativo === "balcao" ? ITEM_MENU_ATIVO : ITEM_MENU}
-              >
-                <IconeBalcao />
-                Balcão
-              </Link>
-              <Link
-                href="/pdv?aba=delivery"
-                {...bloqueioMenu}
-                className={ativo === "delivery" ? ITEM_MENU_ATIVO : ITEM_MENU}
-              >
-                <IconeDelivery />
-                Delivery
-              </Link>
-              <Link
-                href="/pdv?aba=kds"
-                {...bloqueioMenu}
-                className={ativo === "kds" ? ITEM_MENU_ATIVO : ITEM_MENU}
-              >
-                <IconeKds />
-                <span className="flex-1">Cozinha</span>
-                {pendentes > 0 && (
-                  <span className="bg-red-500 text-white text-[10px] font-bold rounded-full min-w-[18px] h-[18px] px-1 flex items-center justify-center">
-                    {pendentes}
-                  </span>
-                )}
-              </Link>
-              <Link
-                href="/pdv?aba=finalizados"
-                {...bloqueioMenu}
-                className={
-                  ativo === "finalizados" ? ITEM_MENU_ATIVO : ITEM_MENU
-                }
-              >
-                <IconeFinalizado />
-                Pedido Finalizado
-              </Link>
-            </div>
-          </div>
-
-          {/* Seção Gerenciamento */}
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-widest opacity-80 px-2 mb-1.5 [text-shadow:0_1px_2px_rgba(0,0,0,0.5)]">
-              Gerenciamento
-            </p>
-            <div className="space-y-1">
-              <Link
-                href="/pdv?aba=motoboys"
-                className={ativo === "motoboys" ? ITEM_MENU_ATIVO : ITEM_MENU}
-              >
-                <IconeMotoboy />
-                Motoboys
-              </Link>
-              <Link
-                href="/pdv?aba=cadastrar"
-                className={ativo === "cadastrar" ? ITEM_MENU_ATIVO : ITEM_MENU}
-              >
-                <IconeProduto />
-                Cadastrar Produto
-              </Link>
-              <Link
-                href="/pdv?aba=estoque"
-                className={ativo === "estoque" ? ITEM_MENU_ATIVO : ITEM_MENU}
-              >
-                <IconeEstoque />
-                Estoque
-              </Link>
-              <Link
-                href="/pdv?aba=bot"
-                className={ativo === "bot" ? ITEM_MENU_ATIVO : ITEM_MENU}
-              >
-                <IconeBot />
-                Bot Assistente WhatsApp
-              </Link>
-              <Link
-                href="/pdv?aba=caixa"
-                className={ativo === "caixa" ? ITEM_MENU_ATIVO : ITEM_MENU}
-              >
-                <IconeCaixa />
-                Caixa
-              </Link>
-              <Link
-                href="/pdv?aba=relatorios"
-                className={
-                  ativo === "relatorios" ? ITEM_MENU_ATIVO : ITEM_MENU
-                }
-              >
-                <IconeRelatorio />
-                Relatórios
-              </Link>
-              <Link
-                href="/pdv?aba=configuracoes"
-                className={
-                  ativo === "configuracoes" ? ITEM_MENU_ATIVO : ITEM_MENU
-                }
-              >
-                <IconeConfig />
-                Configurações
-              </Link>
-              <Link
-                href="/pdv?aba=layout"
-                className={ativo === "layout" ? ITEM_MENU_ATIVO : ITEM_MENU}
-              >
-                <IconeLayout />
-                Layout
-              </Link>
-            </div>
-          </div>
+                <div className="space-y-1">
+                  {itens.map((def) => (
+                    <ItemMenu
+                      key={def.id}
+                      href={HREF_MENU[def.id]}
+                      ativo={ativo === def.id}
+                      minimizada={minimizada}
+                      icone={ICONES_MENU[def.id]}
+                      rotulo={def.rotulo}
+                      badge={
+                        def.id === "mesa"
+                          ? ocupadas
+                          : def.id === "kds"
+                            ? pendentes
+                            : undefined
+                      }
+                      bloqueio={def.bloqueiaCaixa ? bloqueioMenu : undefined}
+                    />
+                  ))}
+                </div>
+              </div>
+            );
+          })}
         </nav>
 
         {/* Botões de baixo da sidebar */}
-        <div className="p-4">
+        <div className={minimizada ? "p-2" : "p-4"}>
           <button
             onClick={() => setCardapioAberto(true)}
-            className="w-full bg-green-700 hover:bg-green-800 text-white font-extrabold rounded-xl py-2.5 tracking-wide transition shadow-[inset_0_1px_0_rgba(255,255,255,0.3),0_4px_0_#14532d,0_6px_10px_rgba(0,0,0,0.35)] active:translate-y-0.5 active:shadow-[inset_0_1px_0_rgba(255,255,255,0.3),0_1px_0_#14532d,0_3px_6px_rgba(0,0,0,0.35)]"
+            title="Cardápio"
+            className={`w-full bg-green-700 hover:bg-green-800 text-white font-extrabold rounded-xl tracking-wide transition shadow-[inset_0_1px_0_rgba(255,255,255,0.3),0_4px_0_#14532d,0_6px_10px_rgba(0,0,0,0.35)] active:translate-y-0.5 active:shadow-[inset_0_1px_0_rgba(255,255,255,0.3),0_1px_0_#14532d,0_3px_6px_rgba(0,0,0,0.35)] ${
+              minimizada ? "py-2.5 text-lg" : "py-2.5"
+            }`}
           >
-            CARDÁPIO
+            {minimizada ? "📋" : "CARDÁPIO"}
           </button>
         </div>
       </aside>
@@ -570,7 +605,7 @@ export default function LayoutMenu({ ativo, children, refreshKey = 0 }: Props) {
             ) : (
               <p className="p-12 text-center text-sm text-gray-500">
                 Nenhuma imagem de cardápio cadastrada. Vá em{" "}
-                <b>Layout → Imagem do cardápio</b> para escolher a foto.
+                <b>Configurações → Layout → Imagem do cardápio</b> para escolher a foto.
               </p>
             )}
           </div>

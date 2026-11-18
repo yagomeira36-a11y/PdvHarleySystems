@@ -6,6 +6,91 @@
 
 export type TamanhoLetra = "pequeno" | "medio" | "grande";
 
+// ============================================================
+// MENUS DO LATERAL (quais aparecem e em que ordem)
+// ============================================================
+export type MenuId =
+  | "mesa"
+  | "balcao"
+  | "delivery"
+  | "kds"
+  | "finalizados"
+  | "gerenciamento"
+  | "configuracoes";
+
+export type MenuGrupo = "pedidos" | "gerenciamento";
+
+export type MenuDef = {
+  id: MenuId;
+  grupo: MenuGrupo;
+  rotulo: string;
+  bloqueiaCaixa: boolean; // fica bloqueado quando o caixa está fechado
+};
+
+// Catálogo de todos os menus do sistema (ordem padrão)
+export const MENUS_CATALOGO: MenuDef[] = [
+  { id: "mesa", grupo: "pedidos", rotulo: "Mesa", bloqueiaCaixa: true },
+  { id: "balcao", grupo: "pedidos", rotulo: "Balcão", bloqueiaCaixa: true },
+  { id: "delivery", grupo: "pedidos", rotulo: "Delivery", bloqueiaCaixa: true },
+  { id: "kds", grupo: "pedidos", rotulo: "Cozinha", bloqueiaCaixa: true },
+  {
+    id: "finalizados",
+    grupo: "pedidos",
+    rotulo: "Pedido Finalizado",
+    bloqueiaCaixa: false,
+  },
+  {
+    id: "gerenciamento",
+    grupo: "gerenciamento",
+    rotulo: "Gerenciamento de loja",
+    bloqueiaCaixa: false,
+  },
+  {
+    id: "configuracoes",
+    grupo: "gerenciamento",
+    rotulo: "Configurações",
+    bloqueiaCaixa: false,
+  },
+];
+
+// Menu escolhido pelo dono: aparece? (a ordem é a posição na lista)
+export type MenuConfig = { id: MenuId; visivel: boolean };
+
+export const MENUS_PADRAO: MenuConfig[] = MENUS_CATALOGO.map((d) => ({
+  id: d.id,
+  visivel: true,
+}));
+
+export const ROTULO_GRUPO: Record<MenuGrupo, string> = {
+  pedidos: "Painel de Pedidos",
+  gerenciamento: "Gerenciamento",
+};
+
+export function definicaoMenu(id: MenuId): MenuDef {
+  return MENUS_CATALOGO.find((d) => d.id === id) || MENUS_CATALOGO[0];
+}
+
+// Ordena/valida os menus salvos e completa com os que faltarem (ex: um
+// menu novo criado numa versão mais recente). Os menus "Gerenciamento de
+// loja" e "Configurações" nunca podem ficar escondidos: é por eles que o
+// dono acessa Cadastrar Produto, Estoque, Caixa, Relatórios, Layout,
+// Motoboys e Bot Assistente.
+export function menusOrdenados(salvo?: MenuConfig[] | null): MenuConfig[] {
+  const validos = new Set<string>(MENUS_CATALOGO.map((d) => d.id));
+  const fixos = new Set<string>(["gerenciamento", "configuracoes"]);
+  const ordem: MenuConfig[] = [];
+  const vistos = new Set<string>();
+  for (const item of salvo || []) {
+    if (!item || !validos.has(item.id) || vistos.has(item.id)) continue;
+    vistos.add(item.id);
+    ordem.push({ id: item.id, visivel: fixos.has(item.id) ? true : item.visivel !== false });
+  }
+  for (const def of MENUS_CATALOGO) {
+    if (!vistos.has(def.id)) ordem.push({ id: def.id, visivel: true });
+  }
+  return ordem;
+}
+
 export type LayoutConfig = {
   cor: string; // cor principal do layout (sidebar)
   corLetras: string; // cor das letras do menu
@@ -13,6 +98,7 @@ export type LayoutConfig = {
   logo: string | null; // imagem da loja (dataURL) ou null
   fundo: string | null; // imagem de fundo da área principal (dataURL) ou null
   cardapio: string | null; // imagem do cardápio (dataURL) ou null
+  menus: MenuConfig[]; // menus visíveis e sua ordem
 };
 
 export const LAYOUT_PADRAO: LayoutConfig = {
@@ -22,6 +108,7 @@ export const LAYOUT_PADRAO: LayoutConfig = {
   logo: null,
   fundo: null,
   cardapio: null,
+  menus: MENUS_PADRAO,
 };
 
 // Tamanho base da fonte no <html> para cada opção
@@ -55,6 +142,7 @@ export function lerLayout(lojaId: string): LayoutConfig {
       logo: typeof salvo.logo === "string" ? salvo.logo : null,
       fundo: typeof salvo.fundo === "string" ? salvo.fundo : null,
       cardapio: typeof salvo.cardapio === "string" ? salvo.cardapio : null,
+      menus: menusOrdenados(salvo.menus),
     };
   } catch {
     return { ...LAYOUT_PADRAO };

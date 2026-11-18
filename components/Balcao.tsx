@@ -11,6 +11,9 @@
 // - Delivery: exige telefone, nome, rua+complemento, taxa e motoboy
 //   (cria pedido + entrega e salva o cliente p/ reconhecer depois)
 // - Forma de pagamento no carrinho (lista da loja em Configurações)
+// - VÁRIOS PEDIDOS AO MESMO TEMPO: abas de comandas no topo.
+//   Dá para começar um pedido, deixar em rascunho e abrir outro
+//   com "+ Novo Pedido", sem perder o anterior.
 // ============================================================
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -36,20 +39,31 @@ import {
   lerCategorias,
   salvarCategorias,
 } from "@/lib/categorias";
+import {
+  Comanda,
+  ItemCarrinho,
+  TipoVenda,
+  lerComandas,
+  salvarComandas,
+  novaComanda,
+  proximoRotulo,
+} from "@/lib/comandas";
+import {
+  ConfigZonas,
+  Zona,
+  configZonasVazia,
+  distanciaKm,
+  geocodificar,
+  lerZonas,
+  zonaParaDistancia,
+  zonasOrdenadas,
+} from "@/lib/zonas";
 
-// Item do carrinho: produto + quantidade + observação
-export type ItemCarrinho = {
-  key: string; // identificador único da linha do carrinho
-  product: Product;
-  qty: number;
-  observacao: string; // ex: "sem cebola", "sem gelo"
-};
+// ItemCarrinho continua exportado daqui (compatibilidade com a página PDV)
+export type { ItemCarrinho };
 
 // Filtro de categoria (TODOS = sem filtro)
 type FiltroCategoria = "TODOS" | Categoria;
-
-// Tipo da venda escolhido no carrinho
-type TipoVenda = "balcao" | "delivery" | "mesa";
 
 // Mesa do salão (número + status)
 type Mesa = {
@@ -72,42 +86,38 @@ function mensagemErroCriacao(erro: { code?: string; message: string }): string {
   return "Erro ao criar pedido: " + erro.message;
 }
 
+// Rótulo da comanda: "Pedido 1" e, se o cliente já foi digitado, "Pedido 1 - caroline"
+function rotuloComanda(c: { rotulo: string; cliente: string }): string {
+  const nome = (c.cliente || "").trim();
+  return nome ? `${c.rotulo} - ${nome}` : c.rotulo;
+}
+
 type Props = {
-  carrinho: ItemCarrinho[];
-  setCarrinho: React.Dispatch<React.SetStateAction<ItemCarrinho[]>>;
-  cliente: string;
-  setCliente: React.Dispatch<React.SetStateAction<string>>;
   // Chamado após criar um pedido (exibe toast e atualiza as outras telas)
   aoPedidoCriado: (texto: string, tipo?: "ok" | "erro") => void;
 };
 
-export default function Balcao({
-  carrinho,
-  setCarrinho,
-  cliente,
-  setCliente,
-  aoPedidoCriado,
-}: Props) {
+export default function Balcao({ aoPedidoCriado }: Props) {
   const supabase = getSupabase();
   const router = useRouter(); // muda de seção (ex: ir para a cozinha ao finalizar)
+
+  // ============================================================
+  // COMANDAS (pedidos em andamento — várias ao mesmo tempo)
+  // ============================================================
+  const [comandas, setComandas] = useState<Comanda[]>([]);
+  const [ativaId, setAtivaId] = useState("");
+  const [carregado, setCarregado] = useState(false);
 
   // Estados da tela
   const [produtos, setProdutos] = useState<Product[]>([]); // cardápio completo
   const [busca, setBusca] = useState(""); // texto da busca
   const [categoria, setCategoria] = useState<FiltroCategoria>("TODOS"); // filtro ativo
-  const [tipoVenda, setTipoVenda] = useState<TipoVenda>("balcao"); // Balcão | Delivery | Mesa
-  const [telefoneCliente, setTelefoneCliente] = useState(""); // telefone do cliente (campo fixo)
   const [erroBalcao, setErroBalcao] = useState<string | null>(null); // erro dos campos do cliente
   const [mesas, setMesas] = useState<Mesa[]>([]); // mesas do salão (livres/ocupadas)
-  const [mesaEscolhida, setMesaEscolhida] = useState<number | null>(null); // mesa selecionada
   const [carregandoMesas, setCarregandoMesas] = useState(false); // carregando mesas
   const [erroMesa, setErroMesa] = useState<string | null>(null); // erro do modal de mesa
   const [liberando, setLiberando] = useState<number | null>(null); // mesa aguardando 2º clique p/ liberar
   const [motoboys, setMotoboys] = useState<Motoboy[]>([]); // motoboys p/ seleção
-  const [endereco, setEndereco] = useState(""); // rua + número do cliente
-  const [complemento, setComplemento] = useState(""); // complemento do endereço
-  const [taxa, setTaxa] = useState(""); // taxa de entrega (R$)
-  const [motoboyId, setMotoboyId] = useState(""); // motoboy escolhido
   const [erroForm, setErroForm] = useState<string | null>(null); // erro do modal
   const [enviando, setEnviando] = useState(false); // trava durante gravação
   const finalizacaoEmCurso = useRef(false);
@@ -123,16 +133,17 @@ export default function Balcao({
 
   async function finalizarPedido() {
     if (finalizacaoEmCurso.current) return;
-    if (!carrinho.length) { aoPedidoCriado("Adicione itens ao carrinho primeiro.", "erro"); return; }
+    if (!comanda) return;
+    if (!comanda.carrinho.length) { aoPedidoCriado("Adicione itens ao carrinho primeiro.", "erro"); return; }
     finalizacaoEmCurso.current = true;
     pedidoGravado.current = null;
     try {
-      if (tipoVenda === "delivery") await confirmarDelivery();
-      else if (tipoVenda === "mesa") await finalizarMesa();
+      if (comanda.tipoVenda === "delivery") await confirmarDelivery();
+      else if (comanda.tipoVenda === "mesa") await finalizarMesa();
       else await finalizarBalcao();
     } catch (erro) {
       const salvo = pedidoGravado.current as Order | null;
-      if (salvo) setCarrinho([]);
+      if (salvo) removerComanda(comanda.id);
       const mensagem = `${salvo ? `${rotuloPedido(salvo)} já registrado, mas a finalização ficou incompleta.` : "Não foi possível confirmar a gravação do pedido."} ${erro instanceof Error ? erro.message : "Falha de comunicação."} Confira o Caixa antes de tentar novamente. Nenhum documento foi enviado automaticamente.`;
       setErroBalcao(mensagem);
       setErroForm(mensagem);
@@ -144,18 +155,101 @@ export default function Balcao({
     }
   }
   const [taxaPadrao, setTaxaPadrao] = useState<number>(0); // taxa padrão da empresa
+  const [zonasCfg, setZonasCfg] = useState<ConfigZonas>(configZonasVazia()); // zonas de entrega (mapa)
+  const [calculandoEntrega, setCalculandoEntrega] = useState(false); // buscando endereço no mapa
+  const [resultadoEntrega, setResultadoEntrega] = useState<
+    { ok: boolean; texto: string } | null
+  >(null); // resultado do cálculo da entrega
   const [avisoCliente, setAvisoCliente] = useState<string | null>(null); // cliente reconhecido?
   const [produtoAdicionando, setProdutoAdicionando] = useState<Product | null>(null); // produto no modal de observação
   const [observacao, setObservacao] = useState(""); // observação do item sendo adicionado
 
   // Formas de pagamento (lista da loja + escolhida na venda)
   const [pagamentos, setPagamentos] = useState<string[]>([]);
-  const [formaPagamento, setFormaPagamento] = useState("Dinheiro");
 
   // Categorias de produto (lista da loja, com opção de criar novas)
   const [categorias, setCategorias] = useState<string[]>(CATEGORIAS_PADRAO);
   const [novaCategoria, setNovaCategoria] = useState(""); // texto da categoria nova
   const [adicionandoCategoria, setAdicionandoCategoria] = useState(false); // mostra o campo "+"
+
+  // ============================================================
+  // CARREGAR AS COMANDAS SALVAS (rascunhos) DO NAVEGADOR
+  // ============================================================
+  useEffect(() => {
+    const sessao = getSessao();
+    if (!sessao) {
+      setCarregado(true);
+      return;
+    }
+    const salvas = lerComandas(sessao.id);
+    const inicial = salvas.length > 0 ? salvas : [novaComanda("Pedido 1", "Dinheiro")];
+    setComandas(inicial);
+    setAtivaId(inicial[0].id);
+    setCarregado(true);
+  }, []);
+
+  // Salva os rascunhos sempre que algo muda (por loja)
+  useEffect(() => {
+    if (!carregado) return;
+    const sessao = getSessao();
+    if (!sessao) return;
+    salvarComandas(sessao.id, comandas);
+  }, [comandas, carregado]);
+
+  // Comanda em edição (aba ativa)
+  const comanda = comandas.find((c) => c.id === ativaId) ?? comandas[0];
+
+  // Atualiza campos da comanda ativa
+  function atualizar(patch: Partial<Comanda>) {
+    setComandas((atual) =>
+      atual.map((c) => (c.id === ativaId ? { ...c, ...patch } : c))
+    );
+  }
+
+  // Troca de aba (comanda)
+  function trocarComanda(id: string) {
+    if (id === ativaId) return;
+    setAtivaId(id);
+    setErroBalcao(null);
+    setErroForm(null);
+    setErroMesa(null);
+    setLiberando(null);
+    setAvisoCliente(null);
+    setResultadoEntrega(null);
+  }
+
+  // Abre um novo pedido (sem apagar o atual)
+  function novoPedido() {
+    const forma = comanda?.formaPagamento ?? pagamentos[0] ?? "Dinheiro";
+    const nova = novaComanda(proximoRotulo(comandas), forma);
+    setComandas((atual) => [...atual, nova]);
+    setAtivaId(nova.id);
+    setErroBalcao(null);
+    setErroForm(null);
+    setErroMesa(null);
+    setAvisoCliente(null);
+    setResultadoEntrega(null);
+  }
+
+  // Fecha/descarta uma comanda
+  function removerComanda(id: string) {
+    const alvo = comandas.find((c) => c.id === id);
+    if (alvo && alvo.carrinho.length > 0) {
+      const confirmou = window.confirm(
+        `Descartar o ${rotuloComanda(alvo)}? Os itens dele serão perdidos.`
+      );
+      if (!confirmou) return;
+    }
+    const restante = comandas.filter((c) => c.id !== id);
+    if (restante.length === 0) {
+      const nova = novaComanda("Pedido 1", pagamentos[0] ?? "Dinheiro");
+      setComandas([nova]);
+      setAtivaId(nova.id);
+      return;
+    }
+    setComandas(restante);
+    if (ativaId === id) setAtivaId(restante[0].id);
+  }
 
   // ============================================================
   // CARREGAR CARDÁPIO, MOTOBOYS E CONFIGURAÇÕES DA EMPRESA
@@ -194,12 +288,24 @@ export default function Balcao({
     // Formas de pagamento da loja
     const listaPagamentos = lerPagamentos(sessao.id);
     setPagamentos(listaPagamentos);
-    if (listaPagamentos.length > 0 && !listaPagamentos.includes("Dinheiro")) {
-      setFormaPagamento(listaPagamentos[0]);
-    }
+    // Zonas de entrega (mapa com pin da loja + raios)
+    setZonasCfg(lerZonas(sessao.id));
     // Categorias de produto da loja (lista livre, salva no navegador)
     setCategorias(lerCategorias(sessao.id));
   }, [supabase]);
+
+  // Garante que a comanda ativa use uma forma de pagamento que existe na loja
+  useEffect(() => {
+    if (!pagamentos.length || !comanda) return;
+    if (!pagamentos.includes(comanda.formaPagamento)) {
+      setComandas((atual) =>
+        atual.map((c) =>
+          c.id === ativaId ? { ...c, formaPagamento: pagamentos[0] } : c
+        )
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pagamentos, ativaId, carregado]);
 
   // ============================================================
   // CRIAR CATEGORIA NOVA (ex: "molhos") direto nas pills do balcão
@@ -245,52 +351,52 @@ export default function Balcao({
   }, [produtos, categoria, busca]);
 
   // ============================================================
-  // CARRINHO: adicionar (com observação), alterar quantidade e remover
+  // CARRINHO da comanda ativa: adicionar, alterar quantidade e remover
   // ============================================================
   function adicionar(produto: Product, obs: string) {
-    setCarrinho((atual) => {
-      // Mesmo produto + mesma observação = só aumenta a quantidade
-      const existente = atual.find(
-        (i) => i.product.id === produto.id && i.observacao === obs
-      );
-      if (existente) {
-        return atual.map((i) =>
+    if (!comanda) return;
+    const existente = comanda.carrinho.find(
+      (i) => i.product.id === produto.id && i.observacao === obs
+    );
+    const novo = existente
+      ? comanda.carrinho.map((i) =>
           i.key === existente.key ? { ...i, qty: i.qty + 1 } : i
-        );
-      }
-      // Produto novo ou observação diferente = nova linha no carrinho
-      return [
-        ...atual,
-        {
-          key: `${produto.id}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-          product: produto,
-          qty: 1,
-          observacao: obs,
-        },
-      ];
-    });
+        )
+      : [
+          ...comanda.carrinho,
+          {
+            key: `${produto.id}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            product: produto,
+            qty: 1,
+            observacao: obs,
+          },
+        ];
+    atualizar({ carrinho: novo });
   }
 
   function alterarQtd(key: string, delta: number) {
-    setCarrinho((atual) =>
-      atual
+    if (!comanda) return;
+    atualizar({
+      carrinho: comanda.carrinho
         .map((i) => (i.key === key ? { ...i, qty: i.qty + delta } : i))
-        .filter((i) => i.qty > 0)
-    );
+        .filter((i) => i.qty > 0),
+    });
   }
 
   function remover(key: string) {
-    setCarrinho((atual) => atual.filter((i) => i.key !== key));
+    if (!comanda) return;
+    atualizar({ carrinho: comanda.carrinho.filter((i) => i.key !== key) });
   }
 
   // Total do carrinho (sem taxa de entrega)
+  const carrinho = comanda?.carrinho ?? [];
   const total = carrinho.reduce((soma, i) => soma + Number(i.product.price) * i.qty, 0);
 
   // ============================================================
   // FINALIZAR PEDIDO NO BALCÃO (nome e telefone são OPCIONAIS)
   // ============================================================
   async function finalizarBalcao() {
-    if (!supabase || enviando) return;
+    if (!supabase || enviando || !comanda) return;
     const sessao = getSessao();
     if (!sessao) return;
     if (!caixaEstaAberto(sessao.id)) {
@@ -299,8 +405,8 @@ export default function Balcao({
     }
 
     // Nome e telefone opcionais no balcão (obrigatórios só no delivery)
-    const nomeCliente = cliente.trim() || null;
-    const telNormalizado = normalizarTelefone(telefoneCliente);
+    const nomeCliente = comanda.cliente.trim() || null;
+    const telNormalizado = normalizarTelefone(comanda.telefone);
 
     setEnviando(true);
     setErroBalcao(null);
@@ -312,7 +418,7 @@ export default function Balcao({
         total,
         type: "balcao",
         status: "pendente",
-        forma_pagamento: formaPagamento,
+        forma_pagamento: comanda.formaPagamento,
         customer_name: nomeCliente,
         telefone: telNormalizado || null,
         address: null,
@@ -331,7 +437,7 @@ export default function Balcao({
     // 2) Grava os itens do pedido (congela o custo no momento da venda)
     pedidoGravado.current = pedido as Order;
     const { error: erroItens } = await supabase.from("order_items").insert(
-      carrinho.map((i) => ({
+      comanda.carrinho.map((i) => ({
         order_id: pedido.id,
         product_id: i.product.id,
         qty: i.qty,
@@ -355,19 +461,19 @@ export default function Balcao({
       );
     }
 
-    // 5) Limpa a tela, avisa e vai para a cozinha (KDS)
-    setCarrinho([]);
-    setCliente("");
-    setTelefoneCliente("");
+    // 5) Fecha a comanda, avisa e vai para a cozinha (KDS)
     setErroBalcao(null);
+    const rotulo = comanda.rotulo;
+    removerComanda(comanda.id);
     await concluirPedido(pedido as Order, `${rotuloPedido(pedido as Order)} de balcão criado! Total: ${formatarMoeda(total)}`);
+    void rotulo;
   }
 
   // ============================================================
   // CONFIRMAR PEDIDO DELIVERY (telefone + endereço + taxa + motoboy)
   // ============================================================
   async function confirmarDelivery() {
-    if (!supabase || enviando) return;
+    if (!supabase || enviando || !comanda) return;
     const sessao = getSessao();
     if (!sessao) return;
     if (!caixaEstaAberto(sessao.id)) {
@@ -376,24 +482,41 @@ export default function Balcao({
     }
 
     // Validações obrigatórias (campos sempre visíveis ao escolher Delivery)
-    const telNormalizado = normalizarTelefone(telefoneCliente);
+    const telNormalizado = normalizarTelefone(comanda.telefone);
     if (telNormalizado.length < 10) {
       setErroForm("Informe um telefone válido (com DDD).");
       return;
     }
-    if (!cliente.trim()) {
+    if (!comanda.cliente.trim()) {
       setErroForm("Informe o nome do cliente.");
       return;
     }
-    if (!endereco.trim()) {
+    if (!comanda.endereco.trim()) {
       setErroForm("Informe a rua e o número do cliente.");
       return;
     }
-    if (!motoboyId) {
+    if (!comanda.motoboyId) {
       setErroForm("Selecione um motoboy para a entrega.");
       return;
     }
-    const taxaNum = parseFloat(taxa.replace(",", ".")) || 0;
+    // Com zonas cadastradas, exige o cálculo pelo endereço
+    if (zonasCfg.zonas.length > 0) {
+      if (comanda.distanciaKm == null) {
+        setErroForm(
+          'Calcule a entrega pelo endereço (botão "Calcular entrega") para definir a zona e a taxa.'
+        );
+        return;
+      }
+      if (foraDeArea) {
+        setErroForm(
+          `O endereço está fora da área de entrega (${comanda.distanciaKm.toFixed(
+            1
+          )} km). Não entregamos nesse endereço.`
+        );
+        return;
+      }
+    }
+    const taxaNum = parseFloat(comanda.taxa.replace(",", ".")) || 0;
     const totalComTaxa = total + taxaNum;
     setEnviando(true);
     setErroForm(null);
@@ -405,10 +528,10 @@ export default function Balcao({
         total: totalComTaxa,
         type: "delivery",
         status: "pendente",
-        forma_pagamento: formaPagamento,
-        customer_name: cliente.trim(),
-        address: endereco.trim(),
-        complemento: complemento.trim() || null,
+        forma_pagamento: comanda.formaPagamento,
+        customer_name: comanda.cliente.trim(),
+        address: comanda.endereco.trim(),
+        complemento: comanda.complemento.trim() || null,
         telefone: telNormalizado,
         delivery_fee: taxaNum,
         loja_id: sessao.id,
@@ -425,7 +548,7 @@ export default function Balcao({
     // 2) Grava os itens (congela o custo no momento da venda)
     pedidoGravado.current = pedido as Order;
     const { error: erroItens } = await supabase.from("order_items").insert(
-      carrinho.map((i) => ({
+      comanda.carrinho.map((i) => ({
         order_id: pedido.id,
         product_id: i.product.id,
         qty: i.qty,
@@ -440,10 +563,10 @@ export default function Balcao({
     // 3) Salva/atualiza o cliente para reconhecer pelo telefone na próxima venda
     await supabase.from("clientes").upsert(
       {
-        nome: cliente.trim(),
+        nome: comanda.cliente.trim(),
         telefone: telNormalizado,
-        endereco: endereco.trim(),
-        complemento: complemento.trim() || null,
+        endereco: comanda.endereco.trim(),
+        complemento: comanda.complemento.trim() || null,
         loja_id: sessao.id,
       },
       { onConflict: "loja_id,telefone" }
@@ -452,7 +575,7 @@ export default function Balcao({
     // 4) Cria a entrega linkada ao motoboy escolhido
     const { error: erroEntrega } = await supabase.from("entregas").insert({
       order_id: pedido.id,
-      motoboy_id: motoboyId,
+      motoboy_id: comanda.motoboyId,
       status: "pendente",
       taxa: taxaNum,
       loja_id: sessao.id,
@@ -460,16 +583,10 @@ export default function Balcao({
 
     if (erroEntrega) throw new Error("Não foi possível criar a entrega: " + erroEntrega.message);
 
-    // 6) Limpa a tela
-    const motoboy = motoboys.find((m) => m.id === motoboyId);
-    setCarrinho([]);
-    setCliente("");
-    setTelefoneCliente("");
-    setEndereco("");
-    setComplemento("");
-    setTaxa("");
-    setMotoboyId("");
+    // 6) Fecha a comanda
+    const motoboy = motoboys.find((m) => m.id === comanda.motoboyId);
     setAvisoCliente(null);
+    removerComanda(comanda.id);
     await concluirPedido(pedido as Order, `${rotuloPedido(pedido as Order)} de delivery criado! Motoboy: ${motoboy?.nome ?? "—"}`);
   }
 
@@ -478,15 +595,86 @@ export default function Balcao({
   // Delivery -> dados de entrega | Mesa -> seleção de mesa
   // ============================================================
   function escolherTipo(t: TipoVenda) {
-    setTipoVenda(t);
     setErroBalcao(null);
     setErroForm(null);
     setErroMesa(null);
     if (t === "mesa") {
+      atualizar({ tipoVenda: t });
       carregarMesas();
     } else if (t === "delivery") {
       // Pré-preenche a taxa com o padrão da empresa (se ainda vazia)
-      if (!taxa) setTaxa(taxaPadrao > 0 ? String(taxaPadrao) : "");
+      const taxaAtual = comanda?.taxa ?? "";
+      atualizar({
+        tipoVenda: t,
+        taxa: taxaAtual || (taxaPadrao > 0 ? String(taxaPadrao) : ""),
+      });
+    } else {
+      atualizar({ tipoVenda: t });
+    }
+  }
+
+  // ============================================================
+  // CALCULAR A ENTREGA PELO ENDEREÇO (descobre a zona e a taxa)
+  // ============================================================
+  async function calcularEntrega() {
+    if (!comanda) return;
+    const enderecoCompleto = [comanda.endereco, comanda.complemento]
+      .filter(Boolean)
+      .join(", ")
+      .trim();
+    if (enderecoCompleto.length < 4) {
+      setResultadoEntrega({
+        ok: false,
+        texto: "Informe a rua e o número do cliente para calcular.",
+      });
+      return;
+    }
+    setErroForm(null);
+    setCalculandoEntrega(true);
+    setResultadoEntrega(null);
+    try {
+      // Converte o endereço em coordenadas (perto da loja)
+      const achado = await geocodificar(enderecoCompleto, {
+        lat: zonasCfg.lat,
+        lng: zonasCfg.lng,
+      });
+      if (!achado) {
+        setResultadoEntrega({
+          ok: false,
+          texto:
+            "Não encontramos esse endereço. Confira rua, número, bairro e cidade.",
+        });
+        return;
+      }
+      // Distância da loja até o cliente
+      const dist = distanciaKm(zonasCfg.lat, zonasCfg.lng, achado.lat, achado.lng);
+      const zona = zonaParaDistancia(dist, zonasCfg.zonas);
+      if (!zona) {
+        atualizar({ distanciaKm: dist, taxa: "" });
+        setResultadoEntrega({
+          ok: false,
+          texto: `Cliente a ${dist.toFixed(1)} km — fora da área de entrega.`,
+        });
+        return;
+      }
+      const indice =
+        zonasOrdenadas(zonasCfg.zonas).findIndex((z) => z.id === zona.id) + 1;
+      // Preenche a taxa da zona automaticamente
+      atualizar({ distanciaKm: dist, taxa: String(zona.taxa) });
+      setResultadoEntrega({
+        ok: true,
+        texto: `Cliente a ${dist.toFixed(1)} km — Zona ${indice} (até ${
+          zona.raioKm
+        } km) — taxa ${formatarMoeda(zona.taxa)}.`,
+      });
+    } catch (erro) {
+      setResultadoEntrega({
+        ok: false,
+        texto:
+          erro instanceof Error ? erro.message : "Falha ao calcular a entrega.",
+      });
+    } finally {
+      setCalculandoEntrega(false);
     }
   }
 
@@ -494,7 +682,6 @@ export default function Balcao({
   // PEDIDO NA MESA: carregar mesas livres/ocupadas da loja
   // ============================================================
   function carregarMesas() {
-    setMesaEscolhida(null);
     setLiberando(null);
     setErroMesa(null);
     if (!supabase) return;
@@ -549,8 +736,8 @@ export default function Balcao({
   }
 
   async function finalizarMesa() {
-    if (!supabase || enviando) return;
-    if (!mesaEscolhida) {
+    if (!supabase || enviando || !comanda) return;
+    if (!comanda.mesaEscolhida) {
       setErroMesa("Selecione uma mesa livre.");
       return;
     }
@@ -570,12 +757,12 @@ export default function Balcao({
         total,
         type: "mesa",
         status: "pendente",
-        forma_pagamento: formaPagamento,
-        customer_name: cliente.trim() || null,
+        forma_pagamento: comanda.formaPagamento,
+        customer_name: comanda.cliente.trim() || null,
         address: null,
-        telefone: normalizarTelefone(telefoneCliente) || null,
+        telefone: normalizarTelefone(comanda.telefone) || null,
         delivery_fee: 0,
-        mesa_numero: mesaEscolhida,
+        mesa_numero: comanda.mesaEscolhida,
         loja_id: sessao.id,
       })
       .select()
@@ -598,7 +785,7 @@ export default function Balcao({
     // 2) Grava os itens do pedido (congela o custo no momento da venda)
     pedidoGravado.current = pedido as Order;
     const { error: erroItens } = await supabase.from("order_items").insert(
-      carrinho.map((i) => ({
+      comanda.carrinho.map((i) => ({
         order_id: pedido.id,
         product_id: i.product.id,
         qty: i.qty,
@@ -615,24 +802,22 @@ export default function Balcao({
       .from("mesas")
       .update({ status: "ocupada" })
       .eq("loja_id", sessao.id)
-      .eq("numero", mesaEscolhida);
+      .eq("numero", comanda.mesaEscolhida);
     if (erroOcuparMesa) throw new Error("Não foi possível ocupar a mesa: " + erroOcuparMesa.message);
 
-    // 5) Limpa a tela
-    setCarrinho([]);
-    setCliente("");
-    setTelefoneCliente("");
-    setMesaEscolhida(null);
-    await concluirPedido(pedido as Order, `${rotuloPedido(pedido as Order)} da mesa ${mesaEscolhida} criado! Total: ${formatarMoeda(total)}`);
+    // 5) Fecha a comanda
+    const numeroMesa = comanda.mesaEscolhida;
+    removerComanda(comanda.id);
+    await concluirPedido(pedido as Order, `${rotuloPedido(pedido as Order)} da mesa ${numeroMesa} criado! Total: ${formatarMoeda(total)}`);
   }
 
   // ============================================================
-  // RECONHECER CLIENTE PELO TELEFONE (campo fixo do carrinho)
+  // RECONHECER CLIENTE PELO TELEFONE (campo do carrinho)
   // Ao digitar um telefone completo, preenche nome/endereço
   // automaticamente (se o cliente já estiver salvo).
   // ============================================================
-  async function reconhecerClienteBalcao(telefoneDigitado: string) {
-    setTelefoneCliente(telefoneDigitado);
+  async function reconhecerCliente(telefoneDigitado: string) {
+    atualizar({ telefone: telefoneDigitado });
     const telNormalizado = normalizarTelefone(telefoneDigitado);
 
     // Só busca quando o telefone parece completo (10 ou 11 dígitos)
@@ -658,24 +843,98 @@ export default function Balcao({
     }
 
     const c = data as Cliente;
-    setCliente(c.nome);
-    setEndereco(c.endereco ?? "");
-    setComplemento(c.complemento ?? "");
+    atualizar({
+      cliente: c.nome,
+      endereco: c.endereco ?? "",
+      complemento: c.complemento ?? "",
+    });
     setAvisoCliente(`Cliente reconhecido: ${c.nome}. Dados preenchidos!`);
   }
 
   // Taxa convertida para número (para prévia do total com taxa)
-  const taxaNum = parseFloat(taxa.replace(",", ".")) || 0;
+  const taxaNum = parseFloat((comanda?.taxa ?? "").replace(",", ".")) || 0;
+
+  // Zona de entrega que cobre a distância calculada até o cliente
+  const zonaAtual: Zona | null =
+    comanda?.distanciaKm != null
+      ? zonaParaDistancia(comanda.distanciaKm, zonasCfg.zonas)
+      : null;
+  const temZonas = zonasCfg.zonas.length > 0;
+  const foraDeArea =
+    comanda?.distanciaKm != null && temZonas && zonaAtual === null;
+  const zonaIndice = zonaAtual
+    ? zonasOrdenadas(zonasCfg.zonas).findIndex((z) => z.id === zonaAtual.id) + 1
+    : 0;
+
+  if (!carregado || !comanda) {
+    return (
+      <div className="flex-1 flex items-center justify-center text-gray-400">
+        Carregando...
+      </div>
+    );
+  }
 
   return (
     <fieldset disabled={enviando} aria-label="Pedido no balcão" className="flex flex-1 min-h-0 min-w-0">
       {/* ================= LADO ESQUERDO: cardápio ================= */}
       <div className="flex-1 p-4 flex flex-col gap-3 min-w-0">
-        {/* Linha: "Balcão: 1" + busca com lupa */}
+        {/* Abas de comandas (vários pedidos ao mesmo tempo) */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {comandas.map((c) => {
+            const ativa = c.id === comanda.id;
+            const itens = c.carrinho.reduce((s, i) => s + i.qty, 0);
+            return (
+              <span
+                key={c.id}
+                className={`flex items-center gap-1.5 rounded-lg pl-3 pr-1 py-1.5 text-sm font-bold transition cursor-pointer ${
+                  ativa
+                    ? "bg-green-600 text-white shadow"
+                    : "bg-white text-gray-600 hover:bg-gray-100 border border-gray-200"
+                }`}
+                onClick={() => trocarComanda(c.id)}
+                title={`Abrir ${rotuloComanda(c)}`}
+              >
+                <span>
+                  {rotuloComanda(c)}
+                  {itens > 0 && (
+                    <span
+                      className={`ml-1.5 text-xs font-bold ${
+                        ativa ? "text-green-100" : "text-green-600"
+                      }`}
+                    >
+                      {itens} {itens === 1 ? "item" : "itens"}
+                    </span>
+                  )}
+                </span>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    removerComanda(c.id);
+                  }}
+                  title={`Fechar ${rotuloComanda(c)}`}
+                  className={`w-5 h-5 rounded-full text-xs font-bold leading-none ${
+                    ativa
+                      ? "hover:bg-white/25 text-white"
+                      : "hover:bg-gray-200 text-gray-400"
+                  }`}
+                >
+                  ✕
+                </button>
+              </span>
+            );
+          })}
+          <button
+            type="button"
+            onClick={novoPedido}
+            className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold px-3.5 py-1.5 rounded-lg transition shadow"
+          >
+            + Novo Pedido
+          </button>
+        </div>
+
+        {/* Linha: busca com lupa */}
         <div className="flex items-center gap-3">
-          <span className="bg-white text-sm px-3 py-2 rounded whitespace-nowrap">
-            Balcão: <b className="text-green-600">1</b>
-          </span>
           <div className="relative flex-1 max-w-lg">
             {/* Ícone de lupa */}
             <svg
@@ -801,14 +1060,24 @@ export default function Balcao({
 
       {/* ================= LADO DIREITO: carrinho (30%) ================= */}
       <aside className="w-[30%] min-w-[340px] bg-white border-l border-gray-200 p-4 flex flex-col gap-3">
+        {/* Qual comanda está aberta */}
+        <div className="flex items-center justify-between">
+          <p className="text-xs font-bold text-gray-500 uppercase tracking-wider">
+            {rotuloComanda(comanda)}
+          </p>
+          <p className="text-xs text-gray-400">
+            {comandas.length} {comandas.length === 1 ? "pedido aberto" : "pedidos abertos"}
+          </p>
+        </div>
+
         {/* Dados do cliente (sempre visíveis; obrigatórios só no delivery) */}
         <div className="flex flex-col gap-2">
           <input
             type="text"
-            value={cliente}
-            onChange={(e) => setCliente(e.target.value)}
+            value={comanda.cliente}
+            onChange={(e) => atualizar({ cliente: e.target.value })}
             placeholder={
-              tipoVenda === "delivery"
+              comanda.tipoVenda === "delivery"
                 ? "Nome do cliente *"
                 : "Nome do cliente (opcional)"
             }
@@ -816,10 +1085,10 @@ export default function Balcao({
           />
           <input
             type="tel"
-            value={telefoneCliente}
-            onChange={(e) => reconhecerClienteBalcao(e.target.value)}
+            value={comanda.telefone}
+            onChange={(e) => reconhecerCliente(e.target.value)}
             placeholder={
-              tipoVenda === "delivery"
+              comanda.tipoVenda === "delivery"
                 ? "Telefone do cliente *"
                 : "Telefone do cliente (opcional)"
             }
@@ -897,7 +1166,7 @@ export default function Balcao({
               key={t.valor}
               onClick={() => escolherTipo(t.valor)}
               className={`py-2 rounded-lg text-sm font-bold transition ${
-                tipoVenda === t.valor
+                comanda.tipoVenda === t.valor
                   ? "bg-green-600 text-white"
                   : "bg-gray-100 text-gray-600 hover:bg-gray-200"
               }`}
@@ -908,7 +1177,7 @@ export default function Balcao({
         </div>
 
         {/* ================= DELIVERY: dados da entrega (sempre visíveis) ================= */}
-        {tipoVenda === "delivery" && (
+        {comanda.tipoVenda === "delivery" && (
           <div className="bg-gray-50 rounded-lg p-3 flex flex-col gap-2 max-h-[45vh] overflow-y-auto">
             <p className="text-xs font-bold text-gray-500 uppercase tracking-wider">
               Dados da Entrega
@@ -928,8 +1197,11 @@ export default function Balcao({
               </label>
               <input
                 type="text"
-                value={endereco}
-                onChange={(e) => setEndereco(e.target.value)}
+                value={comanda.endereco}
+                onChange={(e) => {
+                  atualizar({ endereco: e.target.value, distanciaKm: null });
+                  setResultadoEntrega(null);
+                }}
                 placeholder="Rua, número, bairro..."
                 className="w-full bg-white border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
               />
@@ -941,12 +1213,46 @@ export default function Balcao({
               </label>
               <input
                 type="text"
-                value={complemento}
-                onChange={(e) => setComplemento(e.target.value)}
+                value={comanda.complemento}
+                onChange={(e) => atualizar({ complemento: e.target.value })}
                 placeholder="Apto, bloco, ponto de referência..."
                 className="w-full bg-white border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
               />
             </div>
+
+            {/* Calcular a entrega pela distância (zona no mapa) */}
+            <button
+              type="button"
+              onClick={() => void calcularEntrega()}
+              disabled={calculandoEntrega}
+              className="bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-sm font-bold px-4 py-2 rounded-lg transition"
+            >
+              {calculandoEntrega
+                ? "Calculando..."
+                : "📍 Calcular entrega pelo endereço"}
+            </button>
+
+            {/* Resultado do cálculo da entrega */}
+            {resultadoEntrega && (
+              <p
+                className={`rounded p-2 text-xs ${
+                  resultadoEntrega.ok
+                    ? "bg-green-50 border border-green-400 text-green-700"
+                    : "bg-red-50 border border-red-400 text-red-600"
+                }`}
+              >
+                {resultadoEntrega.ok ? "✓ " : "⚠ "}
+                {resultadoEntrega.texto}
+              </p>
+            )}
+
+            {!temZonas && (
+              <p className="text-xs text-amber-600">
+                Nenhuma zona de entrega cadastrada. Configure em Configurações →
+                Entrega por Zonas.
+              </p>
+            )}
+
             {/* Taxa + motoboy lado a lado */}
             <div className="grid grid-cols-2 gap-2">
               <div>
@@ -956,8 +1262,8 @@ export default function Balcao({
                 <input
                   type="text"
                   inputMode="decimal"
-                  value={taxa}
-                  onChange={(e) => setTaxa(e.target.value)}
+                  value={comanda.taxa}
+                  onChange={(e) => atualizar({ taxa: e.target.value })}
                   placeholder="Ex: 8,00"
                   className="w-full bg-white border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
                 />
@@ -967,8 +1273,8 @@ export default function Balcao({
                   Motoboy *
                 </label>
                 <select
-                  value={motoboyId}
-                  onChange={(e) => setMotoboyId(e.target.value)}
+                  value={comanda.motoboyId}
+                  onChange={(e) => atualizar({ motoboyId: e.target.value })}
                   className="w-full bg-white border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
                 >
                   <option value="">Selecione...</option>
@@ -1000,7 +1306,7 @@ export default function Balcao({
         )}
 
         {/* ================= MESA: seleção inline (livres/ocupadas) ================= */}
-        {tipoVenda === "mesa" && (
+        {comanda.tipoVenda === "mesa" && (
           <div className="bg-gray-50 rounded-lg p-3 flex flex-col gap-2 max-h-[45vh] overflow-y-auto">
             <p className="text-xs font-bold text-gray-500 uppercase tracking-wider">
               Selecionar Mesa
@@ -1025,13 +1331,13 @@ export default function Balcao({
               <div className="grid grid-cols-4 gap-2">
                 {mesas.map((m) => {
                   const livre = m.status === "disponivel";
-                  const escolhida = mesaEscolhida === m.numero;
+                  const escolhida = comanda.mesaEscolhida === m.numero;
                   const confirmando = liberando === m.numero;
                   return (
                     <button
                       key={m.numero}
                       onClick={() =>
-                        livre ? setMesaEscolhida(m.numero) : liberarMesa(m)
+                        livre ? atualizar({ mesaEscolhida: m.numero }) : liberarMesa(m)
                       }
                       title={
                         livre
@@ -1082,8 +1388,8 @@ export default function Balcao({
             Forma de pagamento
           </label>
           <select
-            value={formaPagamento}
-            onChange={(e) => setFormaPagamento(e.target.value)}
+            value={comanda.formaPagamento}
+            onChange={(e) => atualizar({ formaPagamento: e.target.value })}
             className="w-full bg-white border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
           >
             {pagamentos.map((p) => (
@@ -1111,9 +1417,9 @@ export default function Balcao({
         >
           <span className="block text-2xl font-bold">{formatarMoeda(total)}</span>
           <span className="block text-xs opacity-90">
-            {enviando ? "Salvando e enviando à impressora..." : tipoVenda === "delivery"
+            {enviando ? "Salvando e enviando à impressora..." : comanda.tipoVenda === "delivery"
               ? "Finalizar Delivery"
-              : tipoVenda === "mesa"
+              : comanda.tipoVenda === "mesa"
                 ? "Finalizar na Mesa"
                 : "Finalizar no Balcão"}
           </span>

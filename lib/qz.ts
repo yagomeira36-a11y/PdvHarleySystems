@@ -17,9 +17,78 @@ let conexao: Promise<typeof Qz> | null = null;
 let monitoradas = "";
 let fila: Promise<unknown> = Promise.resolve();
 
-function rotuloPedidoQz(pedido: Pick<Order, "numero_pedido">): string {
+export const MENSAGEM_IMPRESSORA_NAO_ENCONTRADA = "Impressora não encontrada, verifique se o QZ Tray está aberto";
+
+function escapeHtml(valor: unknown): string {
+  return String(valor ?? "").replace(/[&<>"']/g, (caractere) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#039;",
+  })[caractere] || caractere);
+}
+
+function imprimirNoNavegador(dados: DadosImpressao, tipos: TipoImpressao[]): string {
+  if (typeof window === "undefined" || typeof window.print !== "function") {
+    throw new Error(MENSAGEM_IMPRESSORA_NAO_ENCONTRADA);
+  }
+  const documentos = tipos.map((tipo) => {
+    const titulo = tipo === "comprovante" ? "Comprovante" : "Comanda";
+    const itens = dados.itens.map((item) => {
+      const observacao = item.observacao ? `<br><small>${escapeHtml(item.observacao)}</small>` : "";
+      return `<div class="item"><span>${item.quantidade}x ${escapeHtml(item.nome)}${observacao}</span><b>R$ ${(item.quantidade * item.preco).toFixed(2)}</b></div>`;
+    }).join("");
+    return `<section class="documento"><h2>${escapeHtml(dados.empresa.nome_empresa)}</h2><h3>${titulo}</h3><p>Pedido ${escapeHtml(dados.pedido.numero_pedido ?? "")}</p><p>${escapeHtml(dados.pedido.customer_name ?? "")}</p><hr>${itens}<hr><p class="total">Total: R$ ${Number(dados.pedido.total || 0).toFixed(2)}</p><p>${escapeHtml(dados.empresa.telefone ?? "")}</p><p>${escapeHtml(dados.empresa.endereco ?? "")}</p></section>`;
+  }).join("");
+
+  const area = document.createElement("div");
+  area.id = "pdv-print-area";
+  area.innerHTML = documentos;
+  const estilo = document.createElement("style");
+  estilo.id = "pdv-print-style";
+  estilo.textContent = `@media print { body > *:not(#pdv-print-area) { display: none !important; } #pdv-print-area { display:block; font-family:monospace; width:80mm; font-size:12px; } #pdv-print-area .documento { page-break-after:always; } #pdv-print-area h2,#pdv-print-area h3,#pdv-print-area p { margin:4px 0; text-align:center; } #pdv-print-area hr { border:0; border-top:1px dashed #000; } #pdv-print-area .item { display:flex; justify-content:space-between; gap:8px; margin:6px 0; } #pdv-print-area .total { font-weight:bold; } } @media screen { #pdv-print-area { display:none; } }`;
+  document.head.appendChild(estilo);
+  document.body.appendChild(area);
+  try {
+    window.print();
+  } catch {
+    area.remove();
+    estilo.remove();
+    throw new Error(MENSAGEM_IMPRESSORA_NAO_ENCONTRADA);
+  }
+  window.setTimeout(() => { area.remove(); estilo.remove(); }, 1000);
+  return "Documento enviado para impressão pelo navegador.";
+}
+
+function imprimirExtratoNoNavegador(dados: DadosExtrato): string {
+  if (typeof window === "undefined" || typeof window.print !== "function") {
+    throw new Error(MENSAGEM_IMPRESSORA_NAO_ENCONTRADA);
+  }
+  const area = document.createElement("div");
+  area.id = "pdv-print-area";
+  area.innerHTML = `<section class="documento"><h2>${escapeHtml(dados.empresa.nome_empresa)}</h2><h3>Extrato do caixa</h3><p>Emitido em ${escapeHtml(dados.emitidoEm)}</p><hr><p>Fundo de troco: R$ ${dados.fundo.toFixed(2)}</p><p>Vendas: R$ ${dados.vendas.toFixed(2)}</p><p>Lucro estimado: R$ ${dados.lucro.toFixed(2)}</p><p>Cancelados: R$ ${dados.cancelados.toFixed(2)}</p><p>Entregas: R$ ${dados.entregas.toFixed(2)}</p><hr><p>${escapeHtml(dados.empresa.telefone ?? "")}</p><p>${escapeHtml(dados.empresa.endereco ?? "")}</p></section>`;
+  const estilo = document.createElement("style");
+  estilo.id = "pdv-print-style";
+  estilo.textContent = `@media print { body > *:not(#pdv-print-area) { display: none !important; } #pdv-print-area { display:block; font-family:monospace; width:80mm; font-size:12px; } #pdv-print-area h2,#pdv-print-area h3,#pdv-print-area p { margin:4px 0; text-align:center; } #pdv-print-area hr { border:0; border-top:1px dashed #000; } } @media screen { #pdv-print-area { display:none; } }`;
+  document.head.appendChild(estilo);
+  document.body.appendChild(area);
+  try {
+    window.print();
+  } catch {
+    area.remove();
+    estilo.remove();
+    throw new Error(MENSAGEM_IMPRESSORA_NAO_ENCONTRADA);
+  }
+  window.setTimeout(() => { area.remove(); estilo.remove(); }, 1000);
+  return "Extrato enviado para impressão pelo navegador.";
+}
+
+function rotuloPedidoQz(pedido: Pick<Order, "numero_pedido"> & { customer_name?: string | null }): string {
   const numero = Number(pedido.numero_pedido);
-  return Number.isSafeInteger(numero) && numero > 0 ? `Pedido ${numero}` : "Pedido sem número";
+  const base = Number.isSafeInteger(numero) && numero > 0 ? `Pedido ${numero}` : "Pedido sem número";
+  const nome = (pedido.customer_name ?? "").trim();
+  return nome ? `${base} - ${nome}` : base;
 }
 
 export function estadoQz() { return estado; }
@@ -168,7 +237,12 @@ export async function imprimirDadosQz(dados: DadosImpressao, config: ConfigImpre
     verificarSessao();
     const registro = dados.teste ? {} : registroImpressao(chave);
     if (automatico && documentos.some(({ tipo }) => registro[tipo])) throw new Error("Este pedido já teve uma tentativa de impressão. Confira o papel e use Reimprimir em Caixa se necessário; não finalize outra venda.");
-    const qz = await verificarImpressoras(config, tipos);
+    let qz: typeof Qz;
+    try {
+      qz = await verificarImpressoras(config, tipos);
+    } catch {
+      return imprimirNoNavegador(dados, tipos);
+    }
     const grupos = documentos.reduce<{ nome: string; documentos: typeof documentos }[]>((lista, documento) => {
       const grupo = lista.find((item) => item.nome === documento.nome);
       if (grupo) grupo.documentos.push(documento);
@@ -180,7 +254,7 @@ export async function imprimirDadosQz(dados: DadosImpressao, config: ConfigImpre
     for (const grupo of grupos) {
       verificarSessao();
       const problema = problemaImpressora(grupo.nome);
-      if (problema) throw new Error(`${problema}. Já enviado nesta tentativa: ${enviados.join(", ") || "nenhum"}. Confira a fila antes de reimprimir.`);
+      if (problema) return imprimirNoNavegador(dados, tipos);
       if (!dados.teste) {
         grupo.documentos.forEach(({ tipo }) => { registro[tipo] = { estado: "enviando", data: new Date().toISOString() }; });
         localStorage.setItem(chave, JSON.stringify(registro));
@@ -197,7 +271,7 @@ export async function imprimirDadosQz(dados: DadosImpressao, config: ConfigImpre
           grupo.documentos.forEach(({ tipo }) => { registro[tipo] = { estado: "incerto", data: new Date().toISOString() }; });
           try { localStorage.setItem(chave, JSON.stringify(registro)); } catch { /* O registro anterior impede reenvio automático. */ }
         }
-        throw new Error(`QZ não confirmou o envio de ${grupo.documentos.map(({ tipo }) => tipo).join(" + ")}. ${erro instanceof Error ? erro.message : String(erro)} Já enviado: ${enviados.join(", ") || "nenhum"}. Confira papel/fila antes de reimprimir; não há repetição automática.`);
+        return imprimirNoNavegador(dados, tipos);
       }
       enviados.push(...grupo.documentos.map(({ tipo }) => tipo));
       destinos.push(`${grupo.nome}: ${bytes} bytes`);
@@ -223,14 +297,23 @@ export async function imprimirExtratoQz(dados: DadosExtrato, config: ConfigImpre
   if (bytes.length === 0) throw new Error("Extrato vazio. Nada foi enviado ao QZ Tray.");
   const executar = async () => {
     if (getSessao()?.id !== sessao.id) throw new Error("A sessão da loja mudou. Impressão interrompida.");
-    const qz = await verificarImpressoras(config, ["comprovante"]);
+    let qz: typeof Qz;
+    try {
+      qz = await verificarImpressoras(config, ["comprovante"]);
+    } catch {
+      return imprimirExtratoNoNavegador(dados);
+    }
     const problema = problemaImpressora(config.impressoraCliente);
-    if (problema) throw new Error(problema);
+    if (problema) return imprimirExtratoNoNavegador(dados);
     const configuracao = qz.configs.create(config.impressoraCliente, { copies: 1, jobName: "PDVDG EXTRATO", encoding: "ISO-8859-1" });
     const data = [{ type: "raw" as const, format: "command" as const, flavor: "base64" as const, data: base64(bytes) }];
     console.info("[PDVDG QZ] Chamando qz.print (extrato)", { impressora: config.impressoraCliente, bytes: bytes.length });
-    await qz.print(configuracao, data);
-    return `Extrato enviado ao QZ Tray (${config.impressoraCliente}: ${bytes.length} bytes). O retorno confirma o envio à fila, não a saída física do papel; confira o destino.`;
+    try {
+      await qz.print(configuracao, data);
+      return `Extrato enviado ao QZ Tray (${config.impressoraCliente}: ${bytes.length} bytes). O retorno confirma o envio à fila, não a saída física do papel; confira o destino.`;
+    } catch {
+      return imprimirExtratoNoNavegador(dados);
+    }
   };
   const comTrava = async (): Promise<string> => navigator.locks ? await navigator.locks.request("pdv_impressao_extrato", executar) : await executar();
   const operacao = fila.then(comTrava, comTrava);

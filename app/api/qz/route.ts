@@ -45,8 +45,8 @@ function shortText(value: unknown, maxLength: number): value is string {
   return typeof value === "string" && value.length <= maxLength && !CONTROL_CHARACTERS.test(value);
 }
 
-function localSessionOnly(req: NextRequest, isPost: boolean): void {
-  // A sessão demonstrativa exige uso local; o servidor também deve escutar somente no loopback.
+function validateRequestOrigin(req: NextRequest, isPost: boolean): void {
+  // Permitir o PDV em localhost, Vercel ou outro domínio HTTPS.
   const url = req.nextUrl;
   const origin = req.headers.get("origin");
   const host = req.headers.get("host");
@@ -54,20 +54,17 @@ function localSessionOnly(req: NextRequest, isPost: boolean): void {
   try {
     hostUrl = new URL(`${url.protocol}//${host}`);
   } catch {
-    throw new RouteError(403, "Host local inválido.");
+    throw new RouteError(403, "Host inválido.");
   }
-  // Next 14 normaliza endereços de loopback; Origin deve coincidir com o Host original.
-  const localHosts = ["localhost", "127.0.0.1", "[::1]"];
   if (
     !["http:", "https:"].includes(url.protocol) ||
-    !localHosts.includes(url.hostname) || !localHosts.includes(hostUrl.hostname) ||
     hostUrl.host !== host || hostUrl.port !== url.port ||
     req.headers.get("x-pdv-qz") !== "1" ||
     req.headers.get("sec-fetch-site") !== "same-origin" ||
     (isPost && origin === null) ||
     (origin !== null && origin !== hostUrl.origin)
   ) {
-    throw new RouteError(403, "QZ permitido somente no PDV local, com requisição de mesma origem.");
+    throw new RouteError(403, "QZ permitido somente com requisição de mesma origem.");
   }
 
   try {
@@ -264,13 +261,13 @@ function failure(error: unknown): RouteError {
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
   try {
-    localSessionOnly(req, false);
+    validateRequestOrigin(req, false);
     const config = await configuration();
     if (!config) return json({ configured: false, certificate: null, message: SETUP_MESSAGE });
     return json({
       configured: true,
       certificate: config.certificate,
-      message: "Certificado e chave RSA válidos e correspondentes. Impressão silenciosa depende de este certificado ser confiável no QZ Tray; a rota não instala confiança. Uso exclusivo no PDV local, com sessão demonstrativa (não autenticação forte).",
+      message: "Certificado e chave RSA válidos e correspondentes. Impressão silenciosa depende de este certificado ser confiável no QZ Tray; a rota não instala confiança.",
     });
   } catch (error) {
     const problem = failure(error);
@@ -280,7 +277,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
-    localSessionOnly(req, true);
+    validateRequestOrigin(req, true);
     const body = await readJsonLimited(req);
     requireValid(isObject(body) && onlyKeys(body, ["request"]) && typeof body.request === "string" && body.request.length > 0);
     const config = await configuration();

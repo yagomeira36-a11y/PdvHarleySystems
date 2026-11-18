@@ -101,18 +101,18 @@ export default function Login() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#2563EB] to-[#1D4ED8] flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-8">
-        {/* Logo (balão cinza com PdvDG em 3D) */}
+        {/* Caixa padrão enquanto o ícone da loja não for escolhido */}
         <div className="text-center mb-8">
           <div className="relative inline-block">
             <div className="bg-gradient-to-b from-gray-400 to-gray-600 rounded-2xl px-8 py-3 shadow-[0_4px_10px_rgba(0,0,0,0.3),inset_0_2px_3px_rgba(255,255,255,0.35)] border border-white/40">
               <p
-                className="text-3xl font-black italic tracking-wider text-white leading-none"
+                className="text-sm font-black leading-tight text-white"
                 style={{
                   textShadow:
                     "1px 1px 0 #4b5563, 2px 2px 0 #374151, 3px 3px 0 #1f2937, 4px 4px 8px rgba(0,0,0,0.45)",
                 }}
               >
-                PdvDG
+                Escolha seu ícone no layout
               </p>
             </div>
             <div className="absolute -bottom-1.5 left-10 w-3.5 h-3.5 bg-gray-600 rotate-45 rounded-sm" />
