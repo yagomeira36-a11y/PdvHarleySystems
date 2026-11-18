@@ -22,6 +22,16 @@ Inclui frente de caixa (balcão), delivery com motoboys e gestão de entregadore
    - `NEXT_PUBLIC_SUPABASE_URL`
    - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
 
+## Atendente IA pelo WhatsApp
+
+1. Execute [`supabase/atendente-ia-whatsapp.sql`](supabase/atendente-ia-whatsapp.sql) no SQL Editor do Supabase. A migração cria configurações e conversas isoladas por loja, além da coluna `orders.origem`.
+2. No servidor, configure `SUPABASE_SERVICE_ROLE_KEY`, `EVOLUTION_API_URL`, `EVOLUTION_API_KEY`, `WHATSAPP_WEBHOOK_SECRET`, `GEMINI_API_KEY` e `APP_URL`. O `APP_URL` deve ser público e alcançar `/api/whatsapp/webhook`; para desenvolvimento local, use um túnel HTTPS. Nunca exponha essas chaves com prefixo `NEXT_PUBLIC_`.
+3. Configure `GEMINI_MODEL=gemini-3.1-flash-lite` (modelo disponível para esta integração). O código usa esse modelo como fallback se o configurado estiver indisponível.
+4. Entre em Configurações → Bot Assistente → Atendente IA / WhatsApp e conecte o número da loja pelo QR Code. Cada loja usa a instância `loja_[store_id]`; escaneie com o WhatsApp do estabelecimento em **Aparelhos conectados**.
+5. Salve a mensagem de boas-vindas e ligue a IA. A IA consulta o cardápio e as zonas da própria loja, pede confirmação antes de registrar pedido e não responde por cinco minutos depois de uma mensagem manual do dono. Use **Pausar IA** para interromper respostas automáticas sem desconectar.
+
+O token `WHATSAPP_WEBHOOK_SECRET` deve ser um valor aleatório forte, compartilhado somente entre o servidor do PDV e o webhook Evolution. A tela informa quando alguma variável ou a migração ainda estiver faltando.
+
 ## Como rodar
 
 ```bash

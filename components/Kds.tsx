@@ -5,7 +5,7 @@
 // Mostra os pedidos pendentes para a cozinha preparar:
 // - tickets com nº, tipo (balcão/delivery), hora e itens
 // - observações dos itens em destaque (âmbar)
-// - botão "Preparado" para marcar o pedido como pago
+// - botão "Finalizar pedido" para mover o pedido para finalizados
 // ============================================================
 import { useEffect, useRef, useState } from "react";
 import { getSupabase, getSessao, formatarMoeda, rotuloPedido, Order, OrderItem } from "@/lib/supabase";
@@ -80,9 +80,9 @@ export default function Kds({
   }, [refreshKey]);
 
   // ============================================================
-  // MARCAR COMO PREPARADO (pendente -> pago)
+  // FINALIZAR PEDIDO (pendente -> pago)
   // ============================================================
-  async function marcarPreparado(pedido: Order) {
+  async function finalizarPedido(pedido: Order) {
     const sessao = getSessao();
     if (!supabase || !sessao) return;
     if (!caixaEstaAberto(sessao.id)) {
@@ -97,9 +97,9 @@ export default function Kds({
       setMensagem("Erro ao atualizar: " + error.message);
       return;
     }
-    setMensagem(`${rotuloPedido(pedido)} pronto!`);
+    setMensagem(`${rotuloPedido(pedido)} finalizado!`);
     // Avisa a página para atualizar os badges do menu e as outras telas
-    aoPedidoCriado?.(`${rotuloPedido(pedido)} pronto!`);
+    aoPedidoCriado?.(`${rotuloPedido(pedido)} finalizado!`);
     carregar();
   }
 
@@ -245,10 +245,10 @@ export default function Kds({
 
             {/* Ação */}
             <button
-              onClick={() => marcarPreparado(pedido)}
+              onClick={() => finalizarPedido(pedido)}
               className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-2.5 rounded-xl transition"
             >
-              Preparado
+              FINALIZAR PEDIDO
             </button>
           </div>
         ))}

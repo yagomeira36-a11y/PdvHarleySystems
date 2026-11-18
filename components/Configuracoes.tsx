@@ -11,23 +11,13 @@ import { useEffect, useState } from "react";
 import {
   getSupabase,
   getSessao,
+  salvarSessao,
   formatarMoeda,
   Product,
   Configuracao,
 } from "@/lib/supabase";
 import { lerPagamentos, salvarPagamentos } from "@/lib/pagamentos";
-import {
-  ConfigZonas,
-  Zona,
-  configZonasVazia,
-  corZona,
-  geocodificar,
-  lerZonas,
-  novoIdZona,
-  salvarZonas,
-  zonasOrdenadas,
-} from "@/lib/zonas";
-import MapaZonas from "./MapaZonas";
+import DeliveryZonesMap from "./DeliveryZonesMap";
 import ConfigImpressora from "./ConfigImpressora";
 import Motoboys from "./Motoboys";
 import BotAssistente from "./BotAssistente";
@@ -39,7 +29,6 @@ type FormEmpresa = {
   cnpj: string;
   telefone: string;
   endereco: string;
-  taxa_entrega_padrao: string;
 };
 
 // Seções acessíveis pelo hub
@@ -228,7 +217,6 @@ export default function Configuracoes({
     cnpj: "",
     telefone: "",
     endereco: "",
-    taxa_entrega_padrao: "",
   });
   // Custo digitado para cada produto (antes de salvar)
   const [custos, setCustos] = useState<Record<string, string>>({});
@@ -238,13 +226,6 @@ export default function Configuracoes({
   // Formas de pagamento da loja
   const [pagamentos, setPagamentos] = useState<string[]>([]);
   const [novoPagamento, setNovoPagamento] = useState("");
-
-  // Entrega por zonas no mapa — salva no navegador da loja
-  const [zonasCfg, setZonasCfg] = useState<ConfigZonas>(configZonasVazia());
-  const [buscaLoja, setBuscaLoja] = useState("");
-  const [buscandoLoja, setBuscandoLoja] = useState(false);
-  const [zonaRaio, setZonaRaio] = useState("");
-  const [zonaTaxa, setZonaTaxa] = useState("");
 
   // ============================================================
   // CARREGAR DADOS
@@ -257,9 +238,6 @@ export default function Configuracoes({
 
     // Formas de pagamento salvas no navegador da loja
     setPagamentos(lerPagamentos(sessao.id));
-
-    // Zonas de entrega no mapa (pin da loja + círculos de raio)
-    setZonasCfg(lerZonas(sessao.id));
 
     const [resProdutos, resConfig] = await Promise.all([
       supabase.from("products").select("*").eq("loja_id", sessao.id).order("code"),
@@ -276,7 +254,6 @@ export default function Configuracoes({
       cnpj: config?.cnpj ?? "",
       telefone: config?.telefone ?? "",
       endereco: config?.endereco ?? "",
-      taxa_entrega_padrao: String(config?.taxa_entrega_padrao ?? ""),
     });
 
     // Preenche os campos de custo com o valor atual de cada produto
@@ -285,9 +262,6 @@ export default function Configuracoes({
       mapa[p.id] = String(p.cost ?? 0);
     });
     setCustos(mapa);
-
-    // Sugere o endereço da empresa na busca do mapa (só como texto inicial)
-    if (config?.endereco) setBuscaLoja(config.endereco);
 
     setCarregando(false);
   }
@@ -305,19 +279,68 @@ export default function Configuracoes({
     if (!supabase) return;
     const sessao = getSessao();
     if (!sessao) return;
+    const nomeEmpresa = form.nome_empresa.trim();
     const { error } = await supabase.from("configuracoes").upsert(
       {
         loja_id: sessao.id, // uma linha de configuração por loja
-        nome_empresa: form.nome_empresa.trim(),
+        nome_empresa: nomeEmpresa,
         cnpj: form.cnpj.trim() || null,
         telefone: form.telefone.trim() || null,
         endereco: form.endereco.trim() || null,
-        taxa_entrega_padrao: parseFloat(form.taxa_entrega_padrao.replace(",", ".")) || 0,
       },
       { onConflict: "loja_id" }
     );
     if (error) {
       setMensagem("Erro ao salvar: " + error.message);
+      return;
+    }
+
+    let resposta: Response;
+    try {
+      const leitura = await fetch("/api/store-settings", { cache: "no-store" });
+      if (!leitura.ok) {
+        setMensagem(
+          "Nome salvo nas configurações, mas não foi possível carregar as configurações do site."
+        );
+        return;
+      }
+      const settingsAtuais = (await leitura.json()) as Record<string, unknown>;
+      resposta = await fetch("/api/store-settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...settingsAtuais, nome_loja: nomeEmpresa }),
+      });
+    } catch (erro) {
+      setMensagem(
+        "Nome salvo nas configurações, mas não foi possível atualizar o site: " +
+          (erro instanceof Error ? erro.message : String(erro))
+      );
+      return;
+    }
+    if (!resposta.ok) {
+      const resultado = (await resposta.json().catch(() => null)) as
+        | { error?: string }
+        | null;
+      setMensagem(
+        "Nome salvo nas configurações, mas não foi possível atualizar o site: " +
+          (resultado?.error || "erro ao sincronizar o nome da loja.")
+      );
+      return;
+    }
+
+    const { error: erroLoja } = await supabase
+      .from("lojas")
+      .update({ nome_loja: nomeEmpresa })
+      .eq("id", sessao.id);
+    salvarSessao({ ...sessao, nome_loja: nomeEmpresa });
+    window.dispatchEvent(new Event("pdv-sessao-atualizada"));
+
+    if (erroLoja) {
+      setMensagem(
+        "Nome atualizado no site, mas não foi possível atualizar o cadastro da loja: " +
+          erroLoja.message
+      );
+      carregar();
       return;
     }
     setMensagem("Configurações da empresa salvas!");
@@ -368,80 +391,6 @@ export default function Configuracoes({
     setPagamentos(lista);
     salvarPagamentos(sessao.id, lista);
     setMensagem(`Forma de pagamento "${nome}" removida.`);
-  }
-
-  // ============================================================
-  // ZONAS DE ENTREGA NO MAPA (pin da loja + círculos de raio)
-  // ============================================================
-  // Grava a configuração de zonas no navegador da loja
-  function gravarZonas(cfg: ConfigZonas) {
-    const sessao = getSessao();
-    if (!sessao) return;
-    setZonasCfg(cfg);
-    salvarZonas(sessao.id, cfg);
-  }
-
-  // Move o pin da loja no mapa
-  function moverLoja(lat: number, lng: number) {
-    gravarZonas({ ...zonasCfg, lat, lng });
-  }
-
-  // Busca o endereço digitado e posiciona o pin da loja
-  async function buscarEnderecoLoja() {
-    const texto = buscaLoja.trim();
-    if (!texto) {
-      setMensagem("Digite o endereço da sua loja.");
-      return;
-    }
-    setBuscandoLoja(true);
-    try {
-      const achado = await geocodificar(texto);
-      if (!achado) {
-        setMensagem("Endereço não encontrado. Inclua rua, número, bairro e cidade.");
-        return;
-      }
-      gravarZonas({ ...zonasCfg, lat: achado.lat, lng: achado.lng });
-      setMensagem("Loja posicionada no mapa!");
-    } catch (erro) {
-      setMensagem(erro instanceof Error ? erro.message : "Falha ao buscar o endereço.");
-    } finally {
-      setBuscandoLoja(false);
-    }
-  }
-
-  // Adiciona uma zona (círculo) de entrega
-  function adicionarZona() {
-    const raio = parseFloat(zonaRaio.replace(",", ".")) || 0;
-    const taxa = parseFloat(zonaTaxa.replace(",", ".")) || 0;
-    if (raio <= 0) {
-      setMensagem("Informe o raio da zona em KM (ex: 3).");
-      return;
-    }
-    if (zonasCfg.zonas.some((z) => z.raioKm === raio)) {
-      setMensagem(`Já existe uma zona de até ${raio} km.`);
-      return;
-    }
-    const nova: Zona = { id: novoIdZona(), raioKm: raio, taxa };
-    gravarZonas({ ...zonasCfg, zonas: [...zonasCfg.zonas, nova] });
-    setZonaRaio("");
-    setZonaTaxa("");
-    setMensagem(`Zona de até ${raio} km criada!`);
-  }
-
-  // Edita o raio ou o valor de uma zona já criada
-  function editarZona(id: string, campo: "raioKm" | "taxa", valor: string) {
-    const num = parseFloat(valor.replace(",", ".")) || 0;
-    gravarZonas({
-      ...zonasCfg,
-      zonas: zonasCfg.zonas.map((z) => (z.id === id ? { ...z, [campo]: num } : z)),
-    });
-  }
-
-  // Remove uma zona de entrega
-  function removerZona(id: string) {
-    const alvo = zonasCfg.zonas.find((z) => z.id === id);
-    gravarZonas({ ...zonasCfg, zonas: zonasCfg.zonas.filter((z) => z.id !== id) });
-    if (alvo) setMensagem(`Zona de até ${alvo.raioKm} km removida.`);
   }
 
   // Abre uma seção a partir do hub
@@ -555,21 +504,6 @@ export default function Configuracoes({
                         className="w-full bg-gray-100 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
                       />
                     </div>
-                    <div>
-                      <label className="block text-xs text-gray-400 mb-1">
-                        Taxa de entrega padrão (R$)
-                      </label>
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={form.taxa_entrega_padrao}
-                        onChange={(e) =>
-                          setForm({ ...form, taxa_entrega_padrao: e.target.value })
-                        }
-                        placeholder="Ex: 8,00"
-                        className="w-full bg-gray-100 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
-                      />
-                    </div>
                     <div className="md:col-span-2">
                       <label className="block text-xs text-gray-400 mb-1">Endereço</label>
                       <input
@@ -599,166 +533,13 @@ export default function Configuracoes({
               {secao === "zonas" && (
                 <section>
                   <p className="text-xs text-gray-400 mb-3">
-                    Arraste o pin 🏪 para a posição exata da sua loja. Depois crie
-                    zonas de entrega: cada zona é um círculo com um raio (KM) e um
-                    valor (R$). No pedido, o sistema calcula a distância até o
-                    cliente e aplica a zona certa automaticamente.
+                    Defina o centro e as zonas de entrega. O PDV e o cardápio online
+                    usam o mesmo mapa, raios e valores.
                   </p>
-                  <div className="bg-white rounded-xl p-4 flex flex-col gap-4">
-                    {/* Busca do endereço da loja */}
-                    <div className="flex flex-wrap items-end gap-2">
-                      <div className="flex-1 min-w-[240px]">
-                        <label className="block text-xs text-gray-400 mb-1">
-                          Endereço da loja (para posicionar o pin)
-                        </label>
-                        <input
-                          type="text"
-                          value={buscaLoja}
-                          onChange={(e) => setBuscaLoja(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") {
-                              e.preventDefault();
-                              void buscarEnderecoLoja();
-                            }
-                          }}
-                          placeholder="Rua, número, bairro, cidade"
-                          className="w-full bg-gray-100 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
-                        />
-                      </div>
-                      <button
-                        onClick={() => void buscarEnderecoLoja()}
-                        disabled={buscandoLoja}
-                        className="bg-blue-600 hover:bg-blue-700 disabled:opacity-40 font-bold px-5 py-2 rounded-lg transition"
-                      >
-                        {buscandoLoja ? "Buscando..." : "Localizar loja"}
-                      </button>
-                    </div>
-
-                    {/* Mapa com o pin da loja e os círculos das zonas */}
-                    <MapaZonas
-                      lat={zonasCfg.lat}
-                      lng={zonasCfg.lng}
-                      zonas={zonasCfg.zonas}
-                      onMoverLoja={moverLoja}
-                    />
-                    <p className="text-xs text-gray-400">
-                      Dica: arraste o pin 🏪 para ajustar a posição da loja. O mapa
-                      salva sozinho.
-                    </p>
-
-                    {/* Lista de zonas cadastradas */}
-                    {zonasCfg.zonas.length === 0 ? (
-                      <p className="text-sm text-gray-400">
-                        Nenhuma zona criada ainda. Crie a primeira abaixo (ex: até 3
-                        km = R$ 5,00).
-                      </p>
-                    ) : (
-                      <div className="overflow-hidden rounded-lg border border-gray-200">
-                        <table className="w-full text-sm">
-                          <thead className="bg-gray-100 text-gray-600 text-left">
-                            <tr>
-                              <th className="px-3 py-2 w-12">Cor</th>
-                              <th className="px-3 py-2">Zona</th>
-                              <th className="px-3 py-2 text-right w-32">Raio (KM)</th>
-                              <th className="px-3 py-2 text-right w-32">Valor (R$)</th>
-                              <th className="px-3 py-2 text-center w-24">Ações</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-gray-200">
-                            {zonasOrdenadas(zonasCfg.zonas).map((z, i) => (
-                              <tr key={z.id} className="hover:bg-gray-50">
-                                <td className="px-3 py-2">
-                                  <span
-                                    className="inline-block w-5 h-5 rounded-full border"
-                                    style={{
-                                      backgroundColor: corZona(i),
-                                      borderColor: corZona(i),
-                                    }}
-                                    title={`Cor da zona ${i + 1}`}
-                                  />
-                                </td>
-                                <td className="px-3 py-2 font-semibold">
-                                  Zona {i + 1}
-                                </td>
-                                <td className="px-3 py-2 text-right">
-                                  <input
-                                    type="text"
-                                    inputMode="decimal"
-                                    defaultValue={z.raioKm}
-                                    onBlur={(e) =>
-                                      editarZona(z.id, "raioKm", e.target.value)
-                                    }
-                                    className="w-20 bg-gray-100 rounded px-2 py-1 text-right focus:outline-none focus:ring-2 focus:ring-green-500"
-                                  />
-                                </td>
-                                <td className="px-3 py-2 text-right">
-                                  <input
-                                    type="text"
-                                    inputMode="decimal"
-                                    defaultValue={z.taxa}
-                                    onBlur={(e) =>
-                                      editarZona(z.id, "taxa", e.target.value)
-                                    }
-                                    className="w-24 bg-gray-100 rounded px-2 py-1 text-right focus:outline-none focus:ring-2 focus:ring-green-500"
-                                  />
-                                </td>
-                                <td className="px-3 py-2 text-center">
-                                  <button
-                                    onClick={() => removerZona(z.id)}
-                                    className="text-red-600 hover:text-red-700 text-xs font-bold"
-                                    title={`Remover a zona de até ${z.raioKm} km`}
-                                  >
-                                    Excluir
-                                  </button>
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
-                    <p className="text-xs text-gray-400 -mt-2">
-                      Mude o raio e o valor direto na tabela e clique fora do campo
-                      para salvar.
-                    </p>
-
-                    {/* Adicionar zona */}
-                    <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-2 items-end">
-                      <div>
-                        <label className="block text-xs text-gray-400 mb-1">
-                          Raio da nova zona (KM)
-                        </label>
-                        <input
-                          type="text"
-                          inputMode="decimal"
-                          value={zonaRaio}
-                          onChange={(e) => setZonaRaio(e.target.value)}
-                          placeholder="Ex: 3"
-                          className="w-full bg-gray-100 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs text-gray-400 mb-1">
-                          Valor da entrega (R$)
-                        </label>
-                        <input
-                          type="text"
-                          inputMode="decimal"
-                          value={zonaTaxa}
-                          onChange={(e) => setZonaTaxa(e.target.value)}
-                          placeholder="Ex: 5,00"
-                          className="w-full bg-gray-100 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
-                        />
-                      </div>
-                      <button
-                        onClick={adicionarZona}
-                        disabled={!zonaRaio.trim()}
-                        className="bg-green-600 hover:bg-green-700 disabled:opacity-40 font-bold px-5 py-2 rounded-lg transition"
-                      >
-                        Adicionar zona
-                      </button>
-                    </div>
-                  </div>
+                  <DeliveryZonesMap
+                    lojaId={getSessao()?.id ?? ""}
+                    enderecoLoja={form.endereco}
+                  />
                 </section>
               )}
 

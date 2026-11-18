@@ -1,3 +1,4 @@
+import { montarConteudoComanda, normalizarModeloComanda } from "./impressao";
 import type { ConfigImpressora, DadosExtrato, DadosImpressao, TipoImpressao } from "./impressao";
 
 const MAX_BYTES = 1024 * 1024;
@@ -160,8 +161,10 @@ export function montarEscPos(
     for (let i = 0; i < valores.length; i++) bytes.push(valores[i]);
   }
 
-  function escreverCodificado(texto: string, negrito: boolean, centralizado: boolean) {
-    const linhas = quebrarLinhas(texto, config.colunas);
+  function escreverCodificado(texto: string, negrito: boolean, centralizado: boolean, grande = false) {
+    const colunas = grande ? Math.max(1, Math.floor(config.colunas / 2)) : config.colunas;
+    const linhas = quebrarLinhas(texto, colunas);
+    if (grande) adicionar([ESC, 0x21, 0x30]);
     adicionar([ESC, 0x61, centralizado ? 1 : 0, ESC, 0x45, negrito ? 1 : 0]);
     for (let i = 0; i < linhas.length; i++) {
       const linha = linhas[i];
@@ -170,10 +173,11 @@ export function montarEscPos(
       bytes.push(LF);
     }
     adicionar([ESC, 0x45, 0, ESC, 0x61, 0]);
+    if (grande) adicionar([ESC, 0x21, 0]);
   }
 
-  function escrever(texto: unknown, negrito = false, centralizado = false) {
-    escreverCodificado(codificar(texto, tabela), negrito, centralizado);
+  function escrever(texto: unknown, negrito = false, centralizado = false, grande = false) {
+    escreverCodificado(codificar(texto, tabela), negrito, centralizado, grande);
   }
 
   function par(rotulo: string, valor: string, negrito = false) {
@@ -194,51 +198,49 @@ export function montarEscPos(
   }
 
   adicionar([ESC, 0x40, ESC, 0x4d, 0, ESC, 0x74, config.paginaCodigo, ESC, 0x45, 0, ESC, 0x61, 0]);
-  if (dados.teste) {
-    escrever("TESTE DE IMPRESSÃO - SEM VENDA", true, true);
-    escrever("NÃO UTILIZAR PARA COBRANÇA", true, true);
-  }
-  escrever(limparTexto(empresa.nome_empresa).trim() || "PdvDG", true, true);
-  if (empresa.cnpj) escrever("CNPJ: " + limparTexto(empresa.cnpj), false, true);
-  if (empresa.endereco) escrever(empresa.endereco, false, true);
-  if (empresa.telefone) escrever("Tel.: " + limparTexto(empresa.telefone), false, true);
-  escrever(tipo === "comanda" ? "COMANDA DE PRODUÇÃO" : "COMPROVANTE NÃO FISCAL", true, true);
-  if (limparTexto(pedido.status).trim().toLowerCase() === "cancelado") {
-    escrever("PEDIDO CANCELADO", true, true);
-  }
-  separador();
-  const modalidade = pedido.type === "delivery" ? "DELIVERY" : pedido.type === "mesa"
-    ? "MESA " + (pedido.mesa_numero === null || pedido.mesa_numero === undefined ? "não informada" : pedido.mesa_numero)
-    : "BALCÃO";
-  escrever(modalidade, true);
-  const numeroPedido = Number(pedido.numero_pedido);
-  const tituloPedido = dados.teste
-    ? "Pedido: TESTE"
-    : Number.isSafeInteger(numeroPedido) && numeroPedido > 0
-      ? `Pedido ${numeroPedido}`
-      : "Pedido sem número";
-  const nomeCliente = pedido.customer_name ? limparTexto(pedido.customer_name).trim() : "";
-  escrever(nomeCliente && !dados.teste ? `${tituloPedido} - ${nomeCliente}` : tituloPedido);
-  escrever("Data: " + data.toLocaleString("pt-BR"));
-  if (pedido.customer_name) escrever("Cliente: " + limparTexto(pedido.customer_name));
-  if (pedido.telefone) escrever("Telefone: " + limparTexto(pedido.telefone));
-  if (pedido.type === "delivery") {
-    if (pedido.address) escrever("Entrega: " + limparTexto(pedido.address), true);
-    if (pedido.complemento) escrever("Complemento: " + limparTexto(pedido.complemento), true);
-  }
-  separador();
-  if (!dados.itens.length) escrever(dados.teste ? "TESTE - SEM ITENS DE VENDA" : "SEM ITENS", true);
-  for (let i = 0; i < dados.itens.length; i++) {
-    const item = dados.itens[i];
-    escrever(item.quantidade.toString().replace(".", ",") + "x " + limparTexto(item.nome), true);
-    if (tipo === "comprovante") {
+  if (tipo === "comprovante") {
+    if (dados.teste) {
+      escrever("TESTE DE IMPRESSÃO - SEM VENDA", true, true);
+      escrever("NÃO UTILIZAR PARA COBRANÇA", true, true);
+    }
+    escrever(limparTexto(empresa.nome_empresa).trim() || "PdvDG", true, true);
+    if (empresa.cnpj) escrever("CNPJ: " + limparTexto(empresa.cnpj), false, true);
+    if (empresa.endereco) escrever(empresa.endereco, false, true);
+    if (empresa.telefone) escrever("Tel.: " + limparTexto(empresa.telefone), false, true);
+    escrever("COMPROVANTE NÃO FISCAL", true, true);
+    if (limparTexto(pedido.status).trim().toLowerCase() === "cancelado") {
+      escrever("PEDIDO CANCELADO", true, true);
+    }
+    separador();
+    const modalidade = pedido.type === "delivery" ? "DELIVERY" : pedido.type === "mesa"
+      ? "MESA " + (pedido.mesa_numero === null || pedido.mesa_numero === undefined ? "não informada" : pedido.mesa_numero)
+      : "BALCÃO";
+    escrever(modalidade, true);
+    const numeroPedido = Number(pedido.numero_pedido);
+    const tituloPedido = dados.teste
+      ? "Pedido: TESTE"
+      : Number.isSafeInteger(numeroPedido) && numeroPedido > 0
+        ? `Pedido ${numeroPedido}`
+        : "Pedido sem número";
+    const nomeCliente = pedido.customer_name ? limparTexto(pedido.customer_name).trim() : "";
+    escrever(nomeCliente && !dados.teste ? `${tituloPedido} - ${nomeCliente}` : tituloPedido);
+    escrever("Data: " + data.toLocaleString("pt-BR"));
+    if (pedido.customer_name) escrever("Cliente: " + limparTexto(pedido.customer_name));
+    if (pedido.telefone) escrever("Telefone: " + limparTexto(pedido.telefone));
+    if (pedido.type === "delivery") {
+      if (pedido.address) escrever("Entrega: " + limparTexto(pedido.address), true);
+      if (pedido.complemento) escrever("Complemento: " + limparTexto(pedido.complemento), true);
+    }
+    separador();
+    if (!dados.itens.length) escrever(dados.teste ? "TESTE - SEM ITENS DE VENDA" : "SEM ITENS", true);
+    for (let i = 0; i < dados.itens.length; i++) {
+      const item = dados.itens[i];
+      escrever(item.quantidade.toString().replace(".", ",") + "x " + limparTexto(item.nome), true);
       par("Unitário:", moeda(item.preco));
       par("Total do item:", moeda(item.quantidade * item.preco));
+      if (item.observacao) escrever("OBS.: " + limparTexto(item.observacao), true);
+      separador();
     }
-    if (item.observacao) escrever("OBS.: " + limparTexto(item.observacao), true);
-    separador();
-  }
-  if (tipo === "comprovante") {
     // pedido.total já inclui a taxa; ela não deve ser somada novamente.
     par("Subtotal", moeda(total - taxa));
     if (pedido.type === "delivery") par("Taxa de entrega", moeda(taxa));
@@ -247,6 +249,11 @@ export function montarEscPos(
     if (config.rodape) {
       separador();
       escrever(config.rodape, false, true);
+    }
+  } else {
+    const modelo = normalizarModeloComanda(dados.modeloComanda);
+    for (const linha of montarConteudoComanda(dados, modelo)) {
+      escrever(linha.texto, Boolean(linha.negrito), Boolean(linha.centralizado), Boolean(linha.grande));
     }
   }
   adicionar([ESC, 0x64, 3, GS, 0x56, 0x41, 3]);
@@ -403,6 +410,7 @@ export function validarBytesEscPos(bytes: Uint8Array): boolean {
       if (comando === 0x74 ? parametro !== 2 && parametro !== 3 && parametro !== 19 :
           comando === 0x61 || comando === 0x45 ? parametro !== 0 && parametro !== 1 :
           comando === 0x4d ? parametro !== 0 :
+          comando === 0x21 ? parametro !== 0 && parametro !== 0x30 :
           comando === 0x64 ? parametro !== 3 || i !== bytes.length - 7 : true) return false;
       i += 3;
       continue;

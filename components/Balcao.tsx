@@ -26,7 +26,6 @@ import {
   Product,
   Categoria,
   Motoboy,
-  Configuracao,
   Cliente,
 } from "@/lib/supabase";
 import { lerPagamentos } from "@/lib/pagamentos";
@@ -36,6 +35,7 @@ import ImpressaoPedido from "./ImpressaoPedido";
 import { caixaEstaAberto, MENSAGEM_CAIXA_FECHADO } from "@/lib/caixa";
 import {
   CATEGORIAS_PADRAO,
+  inicializarCategorias,
   lerCategorias,
   salvarCategorias,
 } from "@/lib/categorias";
@@ -54,7 +54,7 @@ import {
   configZonasVazia,
   distanciaKm,
   geocodificar,
-  lerZonas,
+  carregarDeliveryZones,
   zonaParaDistancia,
   zonasOrdenadas,
 } from "@/lib/zonas";
@@ -154,8 +154,8 @@ export default function Balcao({ aoPedidoCriado }: Props) {
       finalizacaoEmCurso.current = false;
     }
   }
-  const [taxaPadrao, setTaxaPadrao] = useState<number>(0); // taxa padrão da empresa
   const [zonasCfg, setZonasCfg] = useState<ConfigZonas>(configZonasVazia()); // zonas de entrega (mapa)
+  const [erroZonas, setErroZonas] = useState("");
   const [calculandoEntrega, setCalculandoEntrega] = useState(false); // buscando endereço no mapa
   const [resultadoEntrega, setResultadoEntrega] = useState<
     { ok: boolean; texto: string } | null
@@ -266,33 +266,68 @@ export default function Balcao({ aoPedidoCriado }: Props) {
       .then(({ data }) => {
         const lista = (data || []) as Product[];
         setProdutos(lista);
-        setCategorias(Array.from(new Set([
-          ...lerCategorias(sessao.id),
-          ...lista.map((p) => p.category).filter((c) => c !== "TODOS"),
-        ])));
+        try {
+          setCategorias(inicializarCategorias(
+            sessao.id,
+            lista.map((produto) => produto.category)
+          ));
+        } catch {
+          aoPedidoCriado("Não foi possível carregar as categorias no navegador.", "erro");
+        }
       });
     supabase
       .from("motoboys")
       .select("*")
       .eq("loja_id", sessao.id)
       .then(({ data }) => setMotoboys((data || []) as Motoboy[]));
-    // Taxa de entrega padrão (configurações da loja)
-    supabase
-      .from("configuracoes")
-      .select("*")
-      .eq("loja_id", sessao.id)
-      .maybeSingle()
-      .then(({ data }) => {
-        if (data) setTaxaPadrao(Number((data as Configuracao).taxa_entrega_padrao) || 0);
-      });
     // Formas de pagamento da loja
     const listaPagamentos = lerPagamentos(sessao.id);
     setPagamentos(listaPagamentos);
-    // Zonas de entrega (mapa com pin da loja + raios)
-    setZonasCfg(lerZonas(sessao.id));
     // Categorias de produto da loja (lista livre, salva no navegador)
     setCategorias(lerCategorias(sessao.id));
   }, [supabase]);
+
+  useEffect(() => {
+    const lojaId = getSessao()?.id ?? "";
+    if (!lojaId) return;
+    let ativo = true;
+
+    async function carregarZonas() {
+      try {
+        const config = await carregarDeliveryZones(lojaId);
+        if (ativo) {
+          setZonasCfg(config);
+          setErroZonas("");
+        }
+      } catch (erro) {
+        if (ativo) {
+          setErroZonas(
+            erro instanceof Error
+              ? erro.message
+              : "Não foi possível carregar as zonas de entrega."
+          );
+        }
+      }
+    }
+
+    const receberZonas = (evento: Event) => {
+      const detalhe = (evento as CustomEvent<{
+        lojaId: string;
+        config: ConfigZonas;
+      }>).detail;
+      if (detalhe?.lojaId === lojaId) {
+        setZonasCfg(detalhe.config);
+        setErroZonas("");
+      }
+    };
+
+    void carregarZonas();
+    window.addEventListener("pdv-delivery-zones-atualizado", receberZonas);
+    return () => {
+      ativo = false;
+      window.removeEventListener("pdv-delivery-zones-atualizado", receberZonas);
+    };
+  }, []);
 
   // Garante que a comanda ativa use uma forma de pagamento que existe na loja
   useEffect(() => {
@@ -333,6 +368,25 @@ export default function Balcao({ aoPedidoCriado }: Props) {
     setCategoria(nome);
     setAdicionandoCategoria(false);
     setNovaCategoria("");
+  }
+
+  function excluirCategoria(nome: string) {
+    const s = getSessao();
+    if (!s) return;
+    const confirmou = window.confirm(
+      `Excluir a categoria "${nome}" da lista? Os produtos serão mantidos e continuarão disponíveis em TODOS.`
+    );
+    if (!confirmou) return;
+
+    const lista = categorias.filter((categoriaSalva) => categoriaSalva !== nome);
+    try {
+      salvarCategorias(s.id, lista);
+    } catch {
+      aoPedidoCriado("Não foi possível excluir a categoria no navegador.", "erro");
+      return;
+    }
+    setCategorias(lista);
+    if (categoria === nome) setCategoria("TODOS");
   }
 
   // ============================================================
@@ -499,24 +553,29 @@ export default function Balcao({ aoPedidoCriado }: Props) {
       setErroForm("Selecione um motoboy para a entrega.");
       return;
     }
-    // Com zonas cadastradas, exige o cálculo pelo endereço
-    if (zonasCfg.zonas.length > 0) {
-      if (comanda.distanciaKm == null) {
-        setErroForm(
-          'Calcule a entrega pelo endereço (botão "Calcular entrega") para definir a zona e a taxa.'
-        );
-        return;
-      }
-      if (foraDeArea) {
-        setErroForm(
-          `O endereço está fora da área de entrega (${comanda.distanciaKm.toFixed(
-            1
-          )} km). Não entregamos nesse endereço.`
-        );
-        return;
-      }
+    if (erroZonas) {
+      setErroForm(erroZonas);
+      return;
     }
-    const taxaNum = parseFloat(comanda.taxa.replace(",", ".")) || 0;
+    if (!zonasCfg.zonas.some((zona) => zona.ativo)) {
+      setErroForm("Cadastre uma zona de entrega ativa em Configurações → Entrega por Zonas.");
+      return;
+    }
+    if (comanda.distanciaKm == null) {
+      setErroForm(
+        'Calcule a entrega pelo endereço (botão "Calcular entrega") para definir a zona e a taxa.'
+      );
+      return;
+    }
+    if (foraDeArea || !zonaAtual) {
+      setErroForm(
+        `O endereço está fora da área de entrega (${comanda.distanciaKm.toFixed(
+          1
+        )} km). Não entregamos nesse endereço.`
+      );
+      return;
+    }
+    const taxaNum = zonaAtual.taxa;
     const totalComTaxa = total + taxaNum;
     setEnviando(true);
     setErroForm(null);
@@ -602,11 +661,8 @@ export default function Balcao({ aoPedidoCriado }: Props) {
       atualizar({ tipoVenda: t });
       carregarMesas();
     } else if (t === "delivery") {
-      // Pré-preenche a taxa com o padrão da empresa (se ainda vazia)
-      const taxaAtual = comanda?.taxa ?? "";
       atualizar({
         tipoVenda: t,
-        taxa: taxaAtual || (taxaPadrao > 0 ? String(taxaPadrao) : ""),
       });
     } else {
       atualizar({ tipoVenda: t });
@@ -618,6 +674,17 @@ export default function Balcao({ aoPedidoCriado }: Props) {
   // ============================================================
   async function calcularEntrega() {
     if (!comanda) return;
+    if (erroZonas) {
+      setResultadoEntrega({ ok: false, texto: erroZonas });
+      return;
+    }
+    if (!zonasCfg.zonas.some((zona) => zona.ativo)) {
+      setResultadoEntrega({
+        ok: false,
+        texto: "Nenhuma zona ativa cadastrada. Configure em Configurações → Entrega por Zonas.",
+      });
+      return;
+    }
     const enderecoCompleto = [comanda.endereco, comanda.complemento]
       .filter(Boolean)
       .join(", ")
@@ -851,17 +918,15 @@ export default function Balcao({ aoPedidoCriado }: Props) {
     setAvisoCliente(`Cliente reconhecido: ${c.nome}. Dados preenchidos!`);
   }
 
-  // Taxa convertida para número (para prévia do total com taxa)
-  const taxaNum = parseFloat((comanda?.taxa ?? "").replace(",", ".")) || 0;
-
   // Zona de entrega que cobre a distância calculada até o cliente
   const zonaAtual: Zona | null =
     comanda?.distanciaKm != null
       ? zonaParaDistancia(comanda.distanciaKm, zonasCfg.zonas)
       : null;
-  const temZonas = zonasCfg.zonas.length > 0;
+  const temZonas = zonasCfg.zonas.some((zona) => zona.ativo);
   const foraDeArea =
     comanda?.distanciaKm != null && temZonas && zonaAtual === null;
+  const taxaNum = zonaAtual?.taxa ?? 0;
   const zonaIndice = zonaAtual
     ? zonasOrdenadas(zonasCfg.zonas).findIndex((z) => z.id === zonaAtual.id) + 1
     : 0;
@@ -962,17 +1027,29 @@ export default function Balcao({ aoPedidoCriado }: Props) {
         {/* Pills de categoria */}
         <div className="flex gap-2 flex-wrap items-center">
           {["TODOS", ...categorias].map((c) => (
-            <button
-              key={c}
-              onClick={() => setCategoria(c)}
-              className={`px-4 py-1.5 rounded-full text-sm font-semibold transition ${
-                categoria === c
-                  ? "bg-green-600 text-white"
-                  : "bg-white text-gray-600 hover:bg-gray-100 border border-gray-200"
-              }`}
-            >
-              {c}
-            </button>
+            <span key={c} className="inline-flex items-center gap-1">
+              <button
+                onClick={() => setCategoria(c)}
+                className={`px-4 py-1.5 rounded-full text-sm font-semibold transition ${
+                  categoria === c
+                    ? "bg-green-600 text-white"
+                    : "bg-white text-gray-600 hover:bg-gray-100 border border-gray-200"
+                }`}
+              >
+                {c}
+              </button>
+              {c !== "TODOS" && (
+                <button
+                  type="button"
+                  onClick={() => excluirCategoria(c)}
+                  title={`Excluir categoria ${c}`}
+                  aria-label={`Excluir categoria ${c}`}
+                  className="flex h-6 w-6 items-center justify-center rounded-full text-gray-500 hover:bg-red-100 hover:text-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-600"
+                >
+                  ×
+                </button>
+              )}
+            </span>
           ))}
           {adicionandoCategoria ? (
             <span className="flex items-center gap-1.5">
@@ -1224,7 +1301,7 @@ export default function Balcao({ aoPedidoCriado }: Props) {
             <button
               type="button"
               onClick={() => void calcularEntrega()}
-              disabled={calculandoEntrega}
+              disabled={calculandoEntrega || !!erroZonas || !zonasCfg.zonas.some((zona) => zona.ativo)}
               className="bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-sm font-bold px-4 py-2 rounded-lg transition"
             >
               {calculandoEntrega
@@ -1252,6 +1329,11 @@ export default function Balcao({ aoPedidoCriado }: Props) {
                 Entrega por Zonas.
               </p>
             )}
+            {erroZonas && (
+              <p role="alert" className="text-xs text-red-600">
+                {erroZonas}
+              </p>
+            )}
 
             {/* Taxa + motoboy lado a lado */}
             <div className="grid grid-cols-2 gap-2">
@@ -1261,11 +1343,10 @@ export default function Balcao({ aoPedidoCriado }: Props) {
                 </label>
                 <input
                   type="text"
-                  inputMode="decimal"
-                  value={comanda.taxa}
-                  onChange={(e) => atualizar({ taxa: e.target.value })}
-                  placeholder="Ex: 8,00"
-                  className="w-full bg-white border border-gray-200 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                  value={zonaAtual ? String(zonaAtual.taxa).replace(".", ",") : ""}
+                  readOnly
+                  placeholder="Calcule pelo endereço"
+                  className="w-full bg-gray-100 border border-gray-200 rounded px-3 py-2 text-sm"
                 />
               </div>
               <div>

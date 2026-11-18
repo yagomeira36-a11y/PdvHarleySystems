@@ -16,6 +16,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { getSupabase, getSessao, limparSessao, Sessao } from "@/lib/supabase";
+import { imprimirPedidoAutomatico } from "@/lib/qz";
 import { lojaSemAcesso } from "@/lib/acesso-loja";
 import { caixaEstaAberto, chaveCaixas, MENSAGEM_CAIXA_FECHADO } from "@/lib/caixa";
 import {
@@ -223,9 +224,10 @@ type Props = {
   children: React.ReactNode; // conteúdo da área principal
   // Incrementado a cada pedido criado -> atualiza os badges do menu
   refreshKey?: number;
+  aoPedidoCriado?: (texto: string, tipo?: "ok" | "erro") => void;
 };
 
-export default function LayoutMenu({ ativo, children, refreshKey = 0 }: Props) {
+export default function LayoutMenu({ ativo, children, refreshKey = 0, aoPedidoCriado }: Props) {
   const router = useRouter();
 
   // Loja logada (cookie) — nome no box do administrador e filtro dos dados
@@ -241,6 +243,10 @@ export default function LayoutMenu({ ativo, children, refreshKey = 0 }: Props) {
   // Pedidos pendentes na cozinha (badge do item "KDS (Cozinha)")
   const [pendentes, setPendentes] = useState<number>(0);
   const pedidosAtivosRef = useRef<Set<string> | null>(null);
+  const tentativasImpressaoWhatsApp = useRef(new Map<string, number>());
+  const impressoesWhatsAppEmCurso = useRef(new Set<string>());
+  const pedidosWhatsAppImpressos = useRef(new Set<string>());
+  const aoPedidoCriadoRef = useRef(aoPedidoCriado);
   const [caixaLiberado, setCaixaLiberado] = useState(false);
 
   // Cardápio aberto (imagem configurada na tela Layout)
@@ -260,6 +266,10 @@ export default function LayoutMenu({ ativo, children, refreshKey = 0 }: Props) {
   }, [cardapioAberto]);
 
   useEffect(() => {
+    aoPedidoCriadoRef.current = aoPedidoCriado;
+  }, [aoPedidoCriado]);
+
+  useEffect(() => {
     function atualizarCaixa() {
       const s = getSessao();
       setCaixaLiberado(s !== null && caixaEstaAberto(s.id));
@@ -277,6 +287,15 @@ export default function LayoutMenu({ ativo, children, refreshKey = 0 }: Props) {
       window.removeEventListener("storage", aoStorage);
       window.removeEventListener("focus", atualizarCaixa);
     };
+  }, []);
+
+  useEffect(() => {
+    function atualizarSessao() {
+      setSessao(getSessao());
+    }
+    window.addEventListener("pdv-sessao-atualizada", atualizarSessao);
+    return () =>
+      window.removeEventListener("pdv-sessao-atualizada", atualizarSessao);
   }, []);
 
   const bloqueioMenu = {
@@ -366,17 +385,63 @@ export default function LayoutMenu({ ativo, children, refreshKey = 0 }: Props) {
       });
 
     let ativo = true;
+    const inicioMonitoramento = Date.now();
+    let ultimoErroMonitoramento = "";
     async function atualizarPedidos() {
       const { data, error } = await db
         .from("orders")
-        .select("id")
+        .select("id,origem,numero_pedido,customer_name,created_at")
         .eq("loja_id", lojaId)
         .in("status", ["pendente", "novo"]);
-      if (!ativo || error || !data) return;
+      if (!ativo) return;
+      if (error || !data) {
+        const mensagemErro = error?.message || "A consulta retornou vazia.";
+        if (mensagemErro !== ultimoErroMonitoramento) {
+          console.error("[PDV] Falha ao verificar novos pedidos do WhatsApp:", mensagemErro);
+          ultimoErroMonitoramento = mensagemErro;
+        }
+        return;
+      }
+      ultimoErroMonitoramento = "";
       const idsAtivos = new Set(data.map((pedido) => String(pedido.id)));
       const anteriores = pedidosAtivosRef.current;
       if (anteriores && Array.from(idsAtivos).some((id) => !anteriores.has(id)) && document.visibilityState === "visible") {
         tocarSomPedidoNovo();
+      }
+      const agora = Date.now();
+      const pedidosNovosWhatsApp = data.filter((pedido) => {
+        if (pedido.origem !== "IA WhatsApp") return false;
+        const criadoEm = new Date(String(pedido.created_at)).getTime();
+        return anteriores
+          ? !anteriores.has(String(pedido.id))
+          : Number.isFinite(criadoEm) && criadoEm >= inicioMonitoramento - 60_000 && criadoEm <= agora;
+      });
+      for (const pedido of pedidosNovosWhatsApp) {
+        const id = String(pedido.id);
+        if (
+          pedidosWhatsAppImpressos.current.has(id) ||
+          impressoesWhatsAppEmCurso.current.has(id) ||
+          (tentativasImpressaoWhatsApp.current.get(id) || 0) >= 3
+        ) continue;
+        tentativasImpressaoWhatsApp.current.set(
+          id,
+          (tentativasImpressaoWhatsApp.current.get(id) || 0) + 1
+        );
+        impressoesWhatsAppEmCurso.current.add(id);
+        void imprimirPedidoAutomatico({
+          id,
+          numero_pedido: pedido.numero_pedido,
+          customer_name: pedido.customer_name,
+        }).then((resultado) => {
+          if (!ativo) return;
+          impressoesWhatsAppEmCurso.current.delete(id);
+          if (!resultado.erro) {
+            pedidosWhatsAppImpressos.current.add(id);
+            aoPedidoCriadoRef.current?.(resultado.mensagem, "ok");
+          } else if ((tentativasImpressaoWhatsApp.current.get(id) || 0) >= 3) {
+            aoPedidoCriadoRef.current?.(resultado.mensagem, "erro");
+          }
+        });
       }
       pedidosAtivosRef.current = idsAtivos;
       setPendentes(idsAtivos.size);

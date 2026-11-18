@@ -3,7 +3,14 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { getSupabase, normalizarTelefone, type Configuracao, type Product } from "@/lib/supabase";
-import { geocodificar, distanciaKm, zonaParaDistancia } from "@/lib/zonas";
+import {
+  carregarDeliveryZones,
+  configZonasVazia,
+  distanciaKm,
+  geocodificar,
+  zonaParaDistancia,
+  type ConfigZonas,
+} from "@/lib/zonas";
 
 type LojaPublica = { id: string; nome?: string | null; nome_loja?: string | null; slug?: string | null };
 type ItemCarrinho = { produto: Product; quantidade: number; observacao: string };
@@ -27,7 +34,6 @@ type StoreSettings = {
   entrega_max: number;
   retirada_min: number;
   retirada_max: number;
-  taxa_entrega: number;
   permitir_entrega: boolean;
   permitir_retirada: boolean;
   apps: {
@@ -38,11 +44,6 @@ type StoreSettings = {
     outros: Array<{ id: string; nome: string; link: string; icone: string }>;
   };
   horarios: Record<"segunda" | "terca" | "quarta" | "quinta" | "sexta" | "sabado" | "domingo", { ativo: boolean; abre: string; fecha: string }>;
-  raios: Array<{ id: string; raioKm: number; taxa: number }>;
-  entrega_gratis_acima: number;
-  fora_raio_tipo: "nao_atender" | "taxa";
-  fora_raio_taxa: number;
-  delivery_center: { lat: number; lng: number };
 };
 
 const VERDE_PADRAO = "#2E9E4A";
@@ -67,7 +68,6 @@ const SETTINGS_PADRAO: StoreSettings = {
   entrega_max: 50,
   retirada_min: 20,
   retirada_max: 35,
-  taxa_entrega: 0,
   permitir_entrega: true,
   permitir_retirada: true,
   apps: {
@@ -86,11 +86,6 @@ const SETTINGS_PADRAO: StoreSettings = {
     sabado: { ativo: true, abre: "18:00", fecha: "23:00" },
     domingo: { ativo: false, abre: "18:00", fecha: "23:00" },
   },
-  raios: [],
-  entrega_gratis_acima: 0,
-  fora_raio_tipo: "nao_atender",
-  fora_raio_taxa: 0,
-  delivery_center: { lat: -23.5505, lng: -46.6333 },
 };
 
 function moeda(valor: number) {
@@ -123,6 +118,7 @@ function ConteudoCardapio() {
   const [loja, setLoja] = useState<LojaPublica | null>(null);
   const [config, setConfig] = useState<Configuracao | null>(null);
   const [settings, setSettings] = useState<StoreSettings | null>(null);
+  const [zonasEntrega, setZonasEntrega] = useState<ConfigZonas>(configZonasVazia());
   const [produtos, setProdutos] = useState<Product[]>([]);
   const [carregando, setCarregando] = useState(true);
   const [erroCarregamento, setErroCarregamento] = useState("");
@@ -188,8 +184,23 @@ function ConteudoCardapio() {
         supabase.from("configuracoes").select("*").eq("loja_id", escolhida.id).maybeSingle(),
         supabase.from("products").select("*").eq("loja_id", escolhida.id).order("category").order("name"),
       ]);
-      const settingsResponse = await fetch(`/api/store-settings?loja=${encodeURIComponent(escolhida.id)}`, { cache: "no-store" });
-      const settingsApi = settingsResponse.ok ? await settingsResponse.json() as StoreSettings : null;
+      let settingsApi: StoreSettings | null = null;
+      let zonasApi: ConfigZonas;
+      try {
+        const [settingsResponse, zonas] = await Promise.all([
+          fetch(`/api/store-settings?loja=${encodeURIComponent(escolhida.id)}`, { cache: "no-store" }),
+          carregarDeliveryZones(escolhida.id, false),
+        ]);
+        settingsApi = settingsResponse.ok ? await settingsResponse.json() as StoreSettings : null;
+        zonasApi = zonas;
+      } catch (error) {
+        console.error("Erro ao carregar as zonas de entrega:", error);
+        if (ativo) {
+          setErroCarregamento("Não foi possível carregar as zonas de entrega desta loja.");
+          setCarregando(false);
+        }
+        return;
+      }
       if (!ativo) return;
       if (produtosRes.error) {
         console.error("Erro ao carregar itens do cardápio:", produtosRes.error.message);
@@ -202,6 +213,7 @@ function ConteudoCardapio() {
       setLoja(escolhida);
       setConfig((configRes.data as Configuracao | null) || null);
       setSettings(settingsApi);
+      setZonasEntrega(zonasApi);
       setProdutos(itens);
       setCarregando(false);
     }
@@ -237,17 +249,10 @@ function ConteudoCardapio() {
       outros: Array.isArray(settings?.apps?.outros) ? settings?.apps?.outros || [] : [],
     },
     horarios: { ...SETTINGS_PADRAO.horarios, ...(settings?.horarios || {}) },
-    raios: Array.isArray(settings?.raios) ? settings.raios : SETTINGS_PADRAO.raios,
-    entrega_gratis_acima: Number(settings?.entrega_gratis_acima || 0),
-    fora_raio_tipo: settings?.fora_raio_tipo === "taxa" ? "taxa" : "nao_atender",
-    fora_raio_taxa: Number(settings?.fora_raio_taxa || 0),
-    delivery_center: settings?.delivery_center || SETTINGS_PADRAO.delivery_center,
   };
   const VERDE = settingsSafe.cor_principal || VERDE_PADRAO;
   const taxaEntrega = tipoEntrega === "Entrega" && settingsSafe.permitir_entrega
-    ? (settingsSafe.entrega_gratis_acima > 0 && subtotal >= settingsSafe.entrega_gratis_acima
-      ? 0
-      : (taxaCalculada ?? Number(settingsSafe.taxa_entrega ?? config?.taxa_entrega_padrao ?? 0)))
+    ? (taxaCalculada ?? 0)
     : 0;
   const total = subtotal + taxaEntrega;
   const nomeLoja = settingsSafe.nome_loja || config?.nome_empresa || loja?.nome_loja || loja?.nome || "Minha Loja";
@@ -302,28 +307,39 @@ function ConteudoCardapio() {
 
   async function calcularTaxaEntrega() {
     const enderecoCompleto = [endereco, numeroEndereco, bairroEndereco].filter(Boolean).join(", ");
-    if (!enderecoCompleto.trim()) return;
+    if (!enderecoCompleto.trim()) {
+      setTaxaCalculada(null);
+      setForaArea(false);
+      return;
+    }
     setCalculandoTaxa(true);
     setForaArea(false);
     try {
-      const centro = settingsSafe.delivery_center;
+      const centro = zonasEntrega;
+      if (!centro.zonas.some((zona) => zona.ativo)) {
+        setTaxaCalculada(null);
+        setForaArea(true);
+        return;
+      }
       const achado = await geocodificar(enderecoCompleto, centro);
       if (!achado) {
-        setTaxaCalculada(settingsSafe.fora_raio_tipo === "taxa" ? settingsSafe.fora_raio_taxa : null);
-        setForaArea(settingsSafe.fora_raio_tipo === "nao_atender");
+        setTaxaCalculada(null);
+        setForaArea(true);
         return;
       }
       const distancia = distanciaKm(centro.lat, centro.lng, achado.lat, achado.lng);
-      const zona = zonaParaDistancia(distancia, settingsSafe.raios);
+      const zona = zonaParaDistancia(distancia, centro.zonas);
       if (!zona) {
-        setTaxaCalculada(settingsSafe.fora_raio_tipo === "taxa" ? settingsSafe.fora_raio_taxa : null);
-        setForaArea(settingsSafe.fora_raio_tipo === "nao_atender");
+        setTaxaCalculada(null);
+        setForaArea(true);
       } else {
         setTaxaCalculada(Number(zona.taxa));
         setForaArea(false);
       }
-    } catch {
+    } catch (error) {
       setTaxaCalculada(null);
+      setForaArea(true);
+      console.error("Erro ao calcular a taxa de entrega:", error);
     } finally {
       setCalculandoTaxa(false);
     }
@@ -336,7 +352,13 @@ function ConteudoCardapio() {
       !nome.trim() ||
       !telefoneCliente.trim() ||
       !carrinho.length ||
-      (tipoEntrega === "Entrega" && (!endereco.trim() || !numeroEndereco.trim() || !bairroEndereco.trim()))
+      (tipoEntrega === "Entrega" && (
+        !endereco.trim() ||
+        !numeroEndereco.trim() ||
+        !bairroEndereco.trim() ||
+        taxaCalculada === null ||
+        foraArea
+      ))
     ) return;
 
     setFinalizandoPedido(true);
@@ -574,7 +596,7 @@ function ConteudoCardapio() {
                 )}
                 <div className="mt-4 border-t border-gray-200 pt-3">
                   <div className="flex items-center justify-between text-sm"><b>{tipoEntrega === "Entrega" ? "Vou receber em casa" : "Vou retirar o pedido"}</b><button type="button" onClick={() => setTipoEntrega(tipoEntrega === "Entrega" ? "Retirada" : "Entrega")} className="font-bold" style={{ color: VERDE }}>alterar</button></div>
-                  <div className="mt-3 flex justify-between text-sm text-gray-500"><span>Taxa de entrega</span><b>{tipoEntrega === "Entrega" ? (foraArea ? "Fora da área" : calculandoTaxa ? "Calculando..." : taxaEntrega > 0 ? moeda(taxaEntrega) : taxaCalculada === 0 || settingsSafe.entrega_gratis_acima > 0 ? "Grátis" : "-") : "-"}</b></div>
+                  <div className="mt-3 flex justify-between text-sm text-gray-500"><span>Taxa de entrega</span><b>{tipoEntrega === "Entrega" ? (foraArea ? "Fora da área" : calculandoTaxa ? "Calculando..." : taxaCalculada !== null ? moeda(taxaEntrega) : "-") : "-"}</b></div>
                   <button type="button" className="mt-3 text-sm font-bold" style={{ color: VERDE }}>Tenho um cupom de desconto</button>
                   <div className="mt-4 flex items-center justify-between border-t border-gray-200 pt-4"><b className="text-sm text-gray-700">Valor total</b><b className="text-xl text-gray-900">{moeda(total)}</b></div>
                   <button type="button" disabled={carrinho.length === 0 || !aberto} onClick={() => setCheckoutAberto(true)} className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-md text-sm font-black text-white disabled:opacity-50" style={{ background: CINZA }}>Fechar pedido <span>›</span></button>
@@ -627,7 +649,7 @@ function ConteudoCardapio() {
             <label className="mt-4 block text-sm font-bold">Observação do pedido (opcional)<textarea value={observacaoPedido} onChange={(event) => setObservacaoPedido(event.target.value)} placeholder="Alguma orientação para o pedido?" className="mt-2 h-20 w-full resize-y rounded-lg border border-gray-300 p-3" /></label>
             {erroCheckout && <p role="alert" className="mt-4 rounded-lg bg-red-50 p-3 text-sm font-semibold text-red-700">{erroCheckout}</p>}
             <p className="my-5 text-right text-xl font-black">Total: {moeda(total)}</p>
-            <button type="button" disabled={finalizandoPedido || !nome.trim() || normalizarTelefone(telefoneCliente).length < 10 || carrinho.length === 0 || !aberto || foraArea || calculandoTaxa || (tipoEntrega === "Entrega" && (!endereco.trim() || !numeroEndereco.trim() || !bairroEndereco.trim()))} onClick={() => void finalizarPedido()} className="flex w-full items-center justify-center gap-2 rounded-lg py-4 font-black text-white disabled:opacity-50" style={{ background: VERDE }}>{finalizandoPedido ? "Salvando pedido..." : "Finalizar pedido"}</button>
+            <button type="button" disabled={finalizandoPedido || !nome.trim() || normalizarTelefone(telefoneCliente).length < 10 || carrinho.length === 0 || !aberto || foraArea || calculandoTaxa || (tipoEntrega === "Entrega" && (!endereco.trim() || !numeroEndereco.trim() || !bairroEndereco.trim() || taxaCalculada === null))} onClick={() => void finalizarPedido()} className="flex w-full items-center justify-center gap-2 rounded-lg py-4 font-black text-white disabled:opacity-50" style={{ background: VERDE }}>{finalizandoPedido ? "Salvando pedido..." : "Finalizar pedido"}</button>
           </div>
         </div>
       )}

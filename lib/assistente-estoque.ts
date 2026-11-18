@@ -90,7 +90,7 @@ export async function responderAssistente(lojaId: string, mensagem: string): Pro
     return "Cadastre os produtos de venda em Gerenciamento → Cadastrar Produto. Itens e ingredientes do estoque são cadastrados separadamente em Estoque. O estoque desta etapa não baixa automaticamente quando uma venda é feita. Para criar uma categoria do cardápio, use o botão + no Balcão.";
   }
   if (/whatsapp/.test(texto)) {
-    return "O WhatsApp ainda não está conectado. Neste momento funciono apenas dentro do sistema. Quando a conta e a integração oficial estiverem prontas, será necessário autorizar os números do dono e dos funcionários antes de liberar acesso ao estoque.";
+    return "Configure a conexão e o Atendente IA em Configurações → Bot Assistente → Atendente IA / WhatsApp. O atendimento aos clientes usa o número conectado da própria loja; este chat interno continua separado.";
   }
   return "Posso ajudar com estoque, caixa, produtos, relatórios, delivery, mesas e fotos. Para consultar um item, use ESTOQUE seguido do código. Digite AJUDA para ver os comandos disponíveis.";
 }

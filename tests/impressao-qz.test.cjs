@@ -13,11 +13,17 @@ function carregar(arquivo, mocks = {}, extras = {}) {
   return module.exports;
 }
 
-const escpos = carregar('lib/escpos.ts');
+const impressao = carregar('lib/impressao.ts', {
+  './supabase': {
+    getSessao: () => ({ id: 'loja-teste', nome_loja: 'Hamburgueria Teste' }),
+    getSupabase: () => null,
+  },
+});
+const escpos = carregar('lib/escpos.ts', { './impressao': impressao });
 const config = { impressoraCliente: 'Térmica 80', impressoraCozinha: 'Térmica 80', colunas: 48, paginaCodigo: 2, rodape: 'Obrigado!' };
 const dados = { pedido: { id: '00000000-0000-4000-8000-000000000050', total: 35, delivery_fee: 5, type: 'delivery', status: 'pendente', customer_name: 'João', address: 'Rua São José, 1', complemento: 'Fundos', telefone: '11999999999', created_at: '2026-11-17T12:00:00Z', forma_pagamento: 'Fiado' }, empresa: { nome_empresa: 'Hambúrguer & ação', cnpj: null, telefone: null, endereco: null }, itens: [{ nome: 'Pão\x1b\x70\x00\x1d\x56\x00', quantidade: 2, preco: 15, observacao: 'Sem cebola ' + 'X'.repeat(100) }] };
 const cliente = escpos.montarEscPos(dados, config, 'comprovante');
-const cozinha = escpos.montarEscPos(dados, config, 'comanda');
+const cozinha = escpos.montarEscPos({ ...dados, modeloComanda: 'modelo3' }, config, 'comanda');
 for (const bytes of [cliente, cozinha]) {
   assert(escpos.validarBytesEscPos(bytes));
   assert.equal(Buffer.from(bytes).subarray(-7).toString('hex'), '1b64031d564103');

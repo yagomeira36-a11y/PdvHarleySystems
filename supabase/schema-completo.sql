@@ -97,6 +97,8 @@ CREATE TABLE public.products (
   cost       NUMERIC(10,2) NOT NULL DEFAULT 0,      -- custo de produção (lucro)
   category   TEXT NOT NULL DEFAULT 'HAMBÚRGUER',    -- categoria (texto livre)
   image_url  TEXT,                                  -- foto do produto
+  description TEXT,
+  available  BOOLEAN NOT NULL DEFAULT true,
   code       INTEGER NOT NULL,                      -- código interno (ex: 12)
   loja_id    UUID NOT NULL,                         -- dona do produto
   created_at TIMESTAMPTZ DEFAULT now()
@@ -242,6 +244,8 @@ CREATE TABLE public.configuracoes (
   telefone            TEXT,
   endereco            TEXT,
   taxa_entrega_padrao NUMERIC(10,2) NOT NULL DEFAULT 0,
+  modelo_comanda      TEXT NOT NULL DEFAULT 'modelo1'
+    CHECK (modelo_comanda IN ('modelo1', 'modelo2', 'modelo3', 'modelo4')),
   updated_at          TIMESTAMPTZ DEFAULT now()
 );
 

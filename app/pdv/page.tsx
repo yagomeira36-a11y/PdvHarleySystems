@@ -84,7 +84,7 @@ function ConteudoPDV() {
   }, []);
 
   return (
-    <LayoutMenu ativo={aba} refreshKey={refreshKey}>
+    <LayoutMenu ativo={aba} refreshKey={refreshKey} aoPedidoCriado={aoPedidoCriado}>
       {/* Conteúdo conforme a seção ativa */}
       {aba === "balcao" && <Balcao aoPedidoCriado={aoPedidoCriado} />}
       {aba === "delivery" && (

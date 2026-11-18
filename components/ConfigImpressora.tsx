@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { getSessao } from "@/lib/supabase";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { getSessao, getSupabase } from "@/lib/supabase";
 import type { Configuracao } from "@/lib/supabase";
-import { IMPRESSORA_PADRAO, dadosTesteImpressao, lerImpressora, salvarImpressora } from "@/lib/impressao";
-import type { ConfigImpressora as PreferenciasImpressora } from "@/lib/impressao";
+import { IMPRESSORA_PADRAO, MODELOS_COMANDA, dadosTesteImpressao, lerImpressora, montarConteudoComanda, normalizarModeloComanda, salvarImpressora } from "@/lib/impressao";
+import type { ConfigImpressora as PreferenciasImpressora, ModeloComanda } from "@/lib/impressao";
 import { conectarQz, estadoQz, imprimirDadosQz, observarQz, problemaImpressora, verificarImpressoras } from "@/lib/qz";
+import { montarEscPos } from "@/lib/escpos";
 
-type Operacao = "conectar" | "status" | "teste";
+type Operacao = "conectar" | "status" | "teste" | "salvar";
 const destinos: { campo: "impressoraCliente" | "impressoraCozinha"; id: string; titulo: string }[] = [
   { campo: "impressoraCliente", id: "printerClient", titulo: "Cliente — comprovante não fiscal" },
   { campo: "impressoraCozinha", id: "printerKitchen", titulo: "Cozinha — comanda" },
@@ -18,7 +19,11 @@ function Spinner() {
 }
 
 export default function ConfigImpressora({ empresa }: { empresa: Configuracao | null }) {
+  const supabase = getSupabase();
   const [config, setConfig] = useState<PreferenciasImpressora>({ ...IMPRESSORA_PADRAO });
+  const [modeloComanda, setModeloComanda] = useState<ModeloComanda>(
+    normalizarModeloComanda(empresa?.modelo_comanda)
+  );
   const [qz, setQz] = useState(estadoQz);
   const [operacao, setOperacao] = useState<Operacao | null>(null);
   const [erro, setErro] = useState<string | null>(null);
@@ -28,6 +33,25 @@ export default function ConfigImpressora({ empresa }: { empresa: Configuracao | 
   const lojaId = useRef<string | null>(null);
   const ocupado = operacao !== null || qz.conectando;
   const selecionadas = !!config.impressoraCliente && !!config.impressoraCozinha;
+  const preview = useMemo(() => {
+    try {
+      const dados = dadosTesteImpressao(empresa, modeloComanda);
+      const linhas = montarConteudoComanda(dados, modeloComanda);
+      const bytes = montarEscPos(dados, config, "comanda");
+      const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0").toUpperCase());
+      const grupos = [];
+      for (let inicio = 0; inicio < hex.length; inicio += 16) {
+        grupos.push(hex.slice(inicio, inicio + 16).join(" "));
+      }
+      return { linhas, codigo: grupos.join("\n"), erro: "" };
+    } catch (falha) {
+      return {
+        linhas: [],
+        codigo: "",
+        erro: falha instanceof Error ? falha.message : "Não foi possível gerar a prévia ESC/POS.",
+      };
+    }
+  }, [config, empresa, modeloComanda]);
 
   useEffect(() => {
     montado.current = true;
@@ -47,6 +71,10 @@ export default function ConfigImpressora({ empresa }: { empresa: Configuracao | 
     };
   }, []);
 
+  useEffect(() => {
+    setModeloComanda(normalizarModeloComanda(empresa?.modelo_comanda));
+  }, [empresa]);
+
   function conferirLoja() {
     const sessao = getSessao();
     if (!sessao || sessao.id !== lojaId.current) {
@@ -61,16 +89,30 @@ export default function ConfigImpressora({ empresa }: { empresa: Configuracao | 
     setMensagem("");
   }
 
-  function salvar(evento: React.FormEvent) {
+  async function salvar(evento: React.FormEvent) {
     evento.preventDefault();
     if (trava.current || estadoQz().conectando) return;
+    trava.current = true;
+    setOperacao("salvar");
     setErro(null);
     setMensagem("");
     try {
-      salvarImpressora(conferirLoja(), config);
-      setMensagem("Impressoras salvas para esta loja neste navegador. Salvar não confirma conexão nem saída física do papel.");
+      const lojaId = conferirLoja();
+      salvarImpressora(lojaId, config);
+      if (!supabase) throw new Error("Conexão com o banco indisponível para salvar o modelo de comanda.");
+      const { error } = await supabase
+        .from("configuracoes")
+        .upsert(
+          { loja_id: lojaId, modelo_comanda: modeloComanda },
+          { onConflict: "loja_id" }
+        );
+      if (error) throw new Error("Não foi possível salvar o modelo de comanda: " + error.message);
+        if (montado.current) setMensagem("Impressoras salvas neste navegador e modelo de comanda salvo nas configurações da loja.");
     } catch (falha) {
-      setErro(falha instanceof Error ? falha.message : "Não foi possível salvar as impressoras.");
+        if (montado.current) setErro(falha instanceof Error ? falha.message : "Não foi possível salvar as impressoras.");
+    } finally {
+      trava.current = false;
+        if (montado.current) setOperacao(null);
     }
   }
 
@@ -84,7 +126,7 @@ export default function ConfigImpressora({ empresa }: { empresa: Configuracao | 
       conferirLoja();
       let resultado: string;
       if (acao === "teste") {
-        resultado = await imprimirDadosQz(dadosTesteImpressao(empresa), config);
+        resultado = await imprimirDadosQz(dadosTesteImpressao(empresa, modeloComanda), config);
       } else {
         await conectarQz();
         conferirLoja();
@@ -112,7 +154,7 @@ export default function ConfigImpressora({ empresa }: { empresa: Configuracao | 
       <p className="mt-1 text-sm text-gray-600">Impressão direta pelo QZ Tray. Preferências salvas por loja neste navegador.</p>
       <div className="my-3 flex flex-wrap gap-2 text-xs font-semibold text-gray-600">
         <span className="rounded-lg bg-gray-100 px-3 py-2">Bobina fixa: 80 mm</span>
-        <span className="rounded-lg bg-gray-100 px-3 py-2">1 comprovante + 1 comanda</span>
+        <span className="rounded-lg bg-gray-100 px-3 py-2">Comprovante + modelo de comanda selecionado</span>
         <span className="rounded-lg bg-gray-100 px-3 py-2">Corte após cada via</span>
       </div>
 
@@ -184,6 +226,18 @@ export default function ConfigImpressora({ empresa }: { empresa: Configuracao | 
               <option value={19}>19 — CP858</option>
             </select>
           </label>
+          <label htmlFor="modelo-comanda" className="text-sm font-semibold">Modelo de Comanda
+            <select
+              id="modelo-comanda"
+              value={modeloComanda}
+              onChange={(evento) => setModeloComanda(normalizarModeloComanda(evento.target.value))}
+              className="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2"
+            >
+              {MODELOS_COMANDA.map((modelo) => (
+                <option key={modelo.valor} value={modelo.valor}>{modelo.rotulo}</option>
+              ))}
+            </select>
+          </label>
           <label htmlFor="impressora-rodape" className="text-sm font-semibold sm:col-span-2">Rodapé do comprovante
             <textarea id="impressora-rodape" maxLength={200} rows={2} value={config.rodape} onChange={(evento) => alterarConfig({ rodape: evento.target.value })} aria-describedby="impressora-rodape-limite" className="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2" />
             <span id="impressora-rodape-limite" className="mt-1 block text-xs font-normal text-gray-600">{config.rodape.length}/200 caracteres. Confira a acentuação no teste conforme o manual da impressora.</span>
@@ -192,12 +246,42 @@ export default function ConfigImpressora({ empresa }: { empresa: Configuracao | 
             <button type="submit" className="rounded-lg bg-green-700 px-5 py-2 text-sm font-bold text-white hover:bg-green-800 disabled:opacity-40">Salvar impressoras</button>
             <button type="button" disabled={!selecionadas || ocupado} onClick={() => executar("teste")} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-40">
               {operacao === "teste" && <Spinner />}
-              {operacao === "teste" ? "Imprimindo teste…" : "Testar impressão"}
+              {operacao === "teste" ? "Imprimindo teste…" : "Imprimir teste"}
             </button>
           </div>
         </fieldset>
       </form>
-      <p className="mt-3 text-xs text-gray-600">Selecione as duas filas para testar. O teste usa as opções acima, mesmo antes de salvar: 1 comprovante e 1 comanda, com corte em cada via. Não cria venda nem grava dados no Supabase. Salve as preferências para os pedidos reais.</p>
+      <p className="mt-3 text-xs text-gray-600">Selecione as duas filas para testar. O teste usa o modelo escolhido mesmo antes de salvar e imprime um exemplo de comprovante e de comanda, com corte em cada via. Não cria venda. Salve as preferências para usar nas próximas impressões.</p>
+
+      <section className="mt-5" aria-labelledby="pre-visualizacao-comanda">
+        <h3 id="pre-visualizacao-comanda" className="mb-2 text-sm font-bold">Prévia da comanda — bobina 80 mm</h3>
+        <div className="max-w-full overflow-x-auto rounded-xl bg-gray-100 p-3">
+          <article className="mx-auto min-h-40 w-[80mm] max-w-full bg-white px-4 py-5 font-mono text-xs text-black shadow">
+            {preview.erro ? (
+              <p role="alert" className="text-red-700">{preview.erro}</p>
+            ) : preview.linhas.map((linha, indice) => (
+              <p
+                key={`${indice}-${linha.texto}`}
+                className={`whitespace-pre-wrap break-words ${linha.negrito ? "font-bold" : ""} ${linha.centralizado ? "text-center" : ""} ${linha.grande ? "text-xl leading-tight" : "my-1"}`}
+              >
+                {linha.texto || "\u00a0"}
+              </p>
+            ))}
+          </article>
+        </div>
+        <details className="mt-3 rounded-lg border border-gray-200 p-3">
+          <summary className="cursor-pointer text-sm font-semibold">
+            Código ESC/POS gerado · Página {config.paginaCodigo} · atualizado com o modelo selecionado
+          </summary>
+          {preview.erro ? (
+            <p role="alert" className="mt-2 text-sm text-red-700">{preview.erro}</p>
+          ) : (
+            <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all rounded bg-gray-950 p-3 text-[10px] text-green-200">
+              {preview.codigo}
+            </pre>
+          )}
+        </details>
+      </section>
 
       <div className="mt-4 space-y-2 rounded-lg bg-gray-100 p-3">
         <h3 className="text-sm font-semibold">Estado informado pelo driver</h3>

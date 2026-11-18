@@ -37,6 +37,8 @@ CREATE TABLE products (
   cost NUMERIC(10,2) NOT NULL DEFAULT 0,           -- custo de produção (para calcular o lucro)
   category categoria_produto NOT NULL DEFAULT 'HAMBÚRGUER', -- categoria (enum)
   image_url TEXT,                                  -- foto do produto
+  description TEXT,
+  available BOOLEAN NOT NULL DEFAULT true,
   code INTEGER NOT NULL,                           -- código interno (ex: 12)
   created_at TIMESTAMPTZ DEFAULT now()
 );

@@ -9,6 +9,7 @@ import {
   Order,
   OrderItem,
 } from "@/lib/supabase";
+import { filtrarPedidosCancelados } from "@/lib/pedidos";
 
 type Periodo = "dia" | "mes" | "ano" | "tudo";
 type PontoGrafico = { rotulo: string; descricao: string; total: number; pedidos: number };
@@ -186,6 +187,10 @@ export default function Relatorios({ refreshKey }: { refreshKey: number }) {
     const doMes = validos.filter((p) => nestePeriodo(p, limites(referencia, "mes")));
     const doAno = validos.filter((p) => nestePeriodo(p, limites(referencia, "ano")));
     const extrato = periodo === "dia" ? doDia : periodo === "mes" ? doMes : periodo === "ano" ? doAno : validos;
+    const cancelados = filtrarPedidosCancelados(
+      pedidos,
+      periodo === "tudo" ? undefined : limites(referencia, periodo)
+    );
     const selecionado = estatistica(extrato);
     const titulo = periodo === "dia"
       ? referencia.toLocaleDateString("pt-BR")
@@ -231,7 +236,7 @@ export default function Relatorios({ refreshKey }: { refreshKey: number }) {
     }));
     return {
       dia: estatistica(doDia), mes: estatistica(doMes), ano: estatistica(doAno),
-      extrato, selecionado, titulo, pontos, canais,
+      extrato, cancelados, selecionado, titulo, pontos, canais,
       rotuloDia: referencia.toLocaleDateString("pt-BR"),
       rotuloMes: referencia.toLocaleDateString("pt-BR", { month: "long", year: "numeric" }),
       rotuloAno: String(ano),
@@ -365,6 +370,50 @@ export default function Relatorios({ refreshKey }: { refreshKey: number }) {
                     {resumo.extrato.map((p) => <tr key={p.id} className="hover:bg-gray-50"><td className="px-4 py-3 text-gray-500">{formatarData(p.created_at)}</td><td className="px-4 py-3 text-gray-500">{formatarHora(p.created_at)}</td><td className="px-4 py-3 font-semibold">{rotuloPedido(p)}</td><td className="px-4 py-3">{p.type === "delivery" ? "Delivery" : p.type === "mesa" ? `Mesa ${p.mesa_numero ?? ""}` : "Balcão"}</td><td className="px-4 py-3 text-gray-600">{p.customer_name || "—"}</td><td className="px-4 py-3 text-gray-600">{p.forma_pagamento || "—"}</td><td className="px-4 py-3 text-right font-semibold">{formatarMoeda(Number(p.total))}</td></tr>)}
                   </tbody>
                   <tfoot><tr className="bg-blue-50 font-bold"><td className="px-4 py-3" colSpan={6}>Total do período ({resumo.extrato.length} pedidos)</td><td className="px-4 py-3 text-right text-blue-700">{formatarMoeda(resumo.selecionado.total)}</td></tr></tfoot>
+                </table>
+              )}
+            </div>
+          </section>
+
+          <section aria-label="Pedidos cancelados">
+            <div className="mb-3">
+              <h2 className="font-extrabold text-lg">CANCELADOS</h2>
+              <p className="text-sm text-gray-500 capitalize">
+                {resumo.titulo} · {resumo.cancelados.length} pedidos cancelados · fora do faturamento
+              </p>
+            </div>
+            <div className="overflow-x-auto rounded-2xl border border-gray-200 bg-white">
+              {resumo.cancelados.length === 0 ? (
+                <p className="px-4 py-8 text-center text-sm text-gray-500">
+                  Nenhum pedido cancelado neste período.
+                </p>
+              ) : (
+                <table className="w-full whitespace-nowrap text-sm">
+                  <thead className="bg-gray-50 text-left text-gray-600">
+                    <tr>
+                      <th className="px-4 py-3">Pedido</th>
+                      <th className="px-4 py-3">Cliente</th>
+                      <th className="px-4 py-3">Motivo do cancelamento</th>
+                      <th className="px-4 py-3 text-right">Valor</th>
+                      <th className="px-4 py-3">Data</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {resumo.cancelados.map((pedido) => {
+                      const dataCancelamento = pedido.cancelado_em || pedido.created_at;
+                      return (
+                        <tr key={pedido.id} className="hover:bg-gray-50">
+                          <td className="px-4 py-3 font-semibold">{pedido.numero_pedido ?? "—"}</td>
+                          <td className="px-4 py-3 text-gray-600">{pedido.customer_name || "—"}</td>
+                          <td className="px-4 py-3 text-gray-600">{pedido.motivo_cancelamento || "Não informado"}</td>
+                          <td className="px-4 py-3 text-right font-semibold">{formatarMoeda(Number(pedido.total))}</td>
+                          <td className="px-4 py-3 text-gray-500">
+                            {formatarData(dataCancelamento)} · {formatarHora(dataCancelamento)}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
                 </table>
               )}
             </div>

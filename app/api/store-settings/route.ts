@@ -8,9 +8,9 @@ const chavesPermitidas = new Set([
   "instagram", "facebook", "banner_url", "logo_url", "cor_principal",
   "status_manual", "abre_as", "fecha_as", "horario_automatico",
   "entrega_min", "entrega_max", "retirada_min", "retirada_max",
-  "taxa_entrega", "permitir_entrega", "permitir_retirada",
+  "permitir_entrega", "permitir_retirada",
   "apps",
-  "horarios", "raios", "entrega_gratis_acima", "fora_raio_tipo", "fora_raio_taxa", "delivery_center",
+  "horarios", "raios", "fora_raio_tipo", "delivery_center",
 ]);
 
 function json(value: unknown, status = 200) {
@@ -47,7 +47,7 @@ export async function GET(req: NextRequest) {
 
   const config = await supabase
     .from("configuracoes")
-    .select("nome_empresa,telefone,endereco,taxa_entrega_padrao,whatsapp,logo_url,cardapio_aberto")
+    .select("nome_empresa,telefone,endereco,whatsapp,logo_url,cardapio_aberto")
     .eq("loja_id", lojaId)
     .maybeSingle();
   if (config.error || !config.data) return json({});
@@ -66,7 +66,6 @@ export async function GET(req: NextRequest) {
     endereco: data.endereco || "",
     whatsapp: data.whatsapp || data.telefone || "",
     logo_url: data.logo_url || "",
-    taxa_entrega: data.taxa_entrega_padrao || 0,
     status_manual: data.cardapio_aberto === false ? "fechado" : "aberto",
   });
 }
@@ -84,33 +83,44 @@ export async function POST(req: NextRequest) {
     .upsert({ loja_id: lojaId, ...settings, updated_at: new Date().toISOString() }, { onConflict: "loja_id" });
   if (!banco.error) return json({ saved: true, source: "store_settings" });
 
+  const configAtual = await supabase
+    .from("configuracoes")
+    .select("store_settings_json")
+    .eq("loja_id", lojaId);
+  if (configAtual.error) return json({ error: configAtual.error.message }, 400);
+
+  const settingsSalvas =
+    configAtual.data?.[0]?.store_settings_json &&
+    typeof configAtual.data[0].store_settings_json === "object"
+      ? configAtual.data[0].store_settings_json as Record<string, unknown>
+      : {};
+  const atualizacao: Record<string, unknown> = {
+    store_settings_json: { ...settingsSalvas, ...settings },
+  };
+  const camposLegados: Record<string, string> = {
+    nome_loja: "nome_empresa",
+    telefone_fixo: "telefone",
+    endereco: "endereco",
+    abre_as: "abre_as",
+    fecha_as: "fecha_as",
+    horarios: "horario_semana",
+    raios: "taxas_raio",
+    apps: "links_apps",
+    banner_url: "banner_url",
+    logo_url: "logo_url",
+    whatsapp: "whatsapp",
+  };
+  for (const [chave, coluna] of Object.entries(camposLegados)) {
+    if (chave in settings) atualizacao[coluna] = settings[chave];
+  }
+  if ("status_manual" in settings) {
+    atualizacao.cardapio_aberto = settings.status_manual !== "fechado";
+  }
+
   const fallback = await supabase
     .from("configuracoes")
-    .update({
-      nome_empresa: String(settings.nome_loja || ""),
-      telefone: String(settings.telefone_fixo || ""),
-      endereco: String(settings.endereco || ""),
-      taxa_entrega_padrao: Number(settings.taxa_entrega || 0),
-    })
+    .update(atualizacao)
     .eq("loja_id", lojaId);
   if (fallback.error) return json({ error: fallback.error.message }, 400);
-  await supabase
-    .from("configuracoes")
-    .update({ store_settings_json: settings })
-    .eq("loja_id", lojaId);
-  await supabase
-    .from("configuracoes")
-    .update({
-      cardapio_aberto: settings.status_manual !== "fechado",
-      abre_as: String(settings.abre_as || "18:00"),
-      fecha_as: String(settings.fecha_as || "23:00"),
-      horario_semana: settings.horarios || null,
-      taxas_raio: settings.raios || null,
-      links_apps: settings.apps || null,
-      banner_url: String(settings.banner_url || ""),
-      logo_url: String(settings.logo_url || ""),
-      whatsapp: String(settings.whatsapp || ""),
-    })
-    .eq("loja_id", lojaId);
   return json({ saved: true, source: "configuracoes" });
 }

@@ -3,13 +3,12 @@
 // ============================================================
 // TELA PEDIDO FINALIZADO
 // Lista os pedidos do expediente ATUAL (caixa aberto):
-// Delivery aparece apenas quando entregue; os demais pedidos
-// aparecem após o preparo. Com o caixa fechado,
+// Os pedidos aparecem após o preparo. Com o caixa fechado,
 // a lista fica vazia (o expediente acabou).
 // Ações por pedido:
 // - Editar: muda nome do cliente, itens e quantidades
 // - Voltar p/ Preparo: status volta para "pendente" (cozinha)
-// - Excluir: vira "cancelado" (continua salvo, sai da lista)
+// - Cancelar: mantém o pedido e registra motivo/data do cancelamento
 // ============================================================
 import { useEffect, useState } from "react";
 import {
@@ -39,6 +38,14 @@ const STATUS_NOME: Record<string, string> = {
   entregue: "entregue",
 };
 
+const MOTIVOS_CANCELAMENTO = [
+  "Cliente desistiu",
+  "Endereço errado / não encontrado",
+  "Falta de ingrediente",
+  "Erro no pedido",
+  "Outro",
+];
+
 export default function PedidosFinalizados({
   refreshKey,
   aoPedidoCriado,
@@ -58,8 +65,14 @@ export default function PedidosFinalizados({
   // Confirmação em 2 cliques (sem janela nativa): pedido + ação
   const [confirmando, setConfirmando] = useState<{
     id: string;
-    acao: "voltar" | "excluir";
+    acao: "voltar";
   } | null>(null);
+
+  const [pedidoCancelando, setPedidoCancelando] = useState<Order | null>(null);
+  const [motivoCancelamento, setMotivoCancelamento] = useState("");
+  const [outroMotivo, setOutroMotivo] = useState("");
+  const [salvandoCancelamento, setSalvandoCancelamento] = useState(false);
+  const [erroCancelamento, setErroCancelamento] = useState("");
 
   // Modal de edição
   const [editandoPedido, setEditandoPedido] = useState<Order | null>(null);
@@ -98,9 +111,7 @@ export default function PedidosFinalizados({
     // Só mostra os pedidos do expediente atual (caixa aberto)
     const aberta = caixaAberto(lerCaixas(sessao.id));
     setCaixaAberta(aberta);
-    let lista = ((resPedidos.data || []) as Order[]).filter(
-      (p) => p.type !== "delivery" || p.status === "entregue"
-    );
+    let lista = (resPedidos.data || []) as Order[];
     if (aberta) {
       const inicio = caixaReaberto(aberta)
         ? new Date(aberta.reabertoEm as string).getTime()
@@ -144,26 +155,55 @@ export default function PedidosFinalizados({
   }
 
   // ============================================================
-  // EXCLUIR (vira "cancelado" — fica salvo, mas fora das listas)
+  // CANCELAR (mantém o pedido no banco e registra o motivo/data)
   // ============================================================
-  async function excluirPedido(p: Order) {
+  async function cancelarPedido(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const p = pedidoCancelando;
     const sessao = getSessao();
-    if (!supabase || !sessao) return;
-    if (!caixaEstaAberto(sessao.id)) {
-      setMensagem(MENSAGEM_CAIXA_FECHADO);
+    if (!supabase || !sessao) {
+      setErroCancelamento("Não foi possível identificar a loja para cancelar o pedido.");
       return;
     }
-    setConfirmando(null);
-    const { error } = await supabase
-      .from("orders")
-      .update({ status: "cancelado" })
-      .eq("id", p.id);
-    if (error) {
-      setMensagem("Erro ao excluir: " + error.message);
+    const motivo = motivoCancelamento === "Outro"
+      ? outroMotivo.trim()
+      : motivoCancelamento;
+    if (!motivo) {
+      setErroCancelamento("Informe o motivo do cancelamento.");
       return;
     }
-    aoPedidoCriado?.(`${rotuloPedido(p)} excluído (cancelado)!`);
-    carregar();
+    if (!p) return;
+
+    setSalvandoCancelamento(true);
+    setErroCancelamento("");
+    try {
+      const { error } = await supabase
+        .from("orders")
+        .update({
+          status: "cancelado",
+          motivo_cancelamento: motivo,
+          cancelado_em: new Date().toISOString(),
+        })
+        .eq("id", p.id)
+        .eq("loja_id", sessao.id);
+      if (error) {
+        setErroCancelamento("Erro ao cancelar o pedido: " + error.message);
+        return;
+      }
+      setPedidoCancelando(null);
+      setMotivoCancelamento("");
+      setOutroMotivo("");
+      setMensagem(`${rotuloPedido(p)} cancelado e mantido no histórico.`);
+      aoPedidoCriado?.(`${rotuloPedido(p)} cancelado!`);
+      carregar();
+    } catch (error) {
+      setErroCancelamento(
+        "Erro ao cancelar o pedido: " +
+          (error instanceof Error ? error.message : "Falha de comunicação.")
+      );
+    } finally {
+      setSalvandoCancelamento(false);
+    }
   }
 
   // ============================================================
@@ -304,24 +344,20 @@ export default function PedidosFinalizados({
                           Voltar p/ Preparo
                         </button>
                       )}
-                      {confirmando?.id === p.id &&
-                      confirmando.acao === "excluir" ? (
-                        <button
-                          onClick={() => excluirPedido(p)}
-                          className="bg-red-700 hover:bg-red-800 text-white text-xs font-bold px-2.5 py-1.5 rounded transition"
-                        >
-                          Confirmar?
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() =>
-                            setConfirmando({ id: p.id, acao: "excluir" })
-                          }
-                          className="bg-red-500 hover:bg-red-600 text-white text-xs font-bold px-2.5 py-1.5 rounded transition"
-                        >
-                          Excluir
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPedidoCancelando(p);
+                          setConfirmando(null);
+                          setMotivoCancelamento("");
+                          setOutroMotivo("");
+                          setErroCancelamento("");
+                          setMensagem(null);
+                        }}
+                        className="bg-red-600 hover:bg-red-700 text-white text-xs font-bold px-2.5 py-1.5 rounded transition"
+                      >
+                        CANCELAR PEDIDO
+                      </button>
                     </div>
                   </td>
                 </tr>
@@ -344,6 +380,79 @@ export default function PedidosFinalizados({
             carregar();
           }}
         />
+      )}
+
+      {pedidoCancelando && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="motivo-cancelamento-titulo"
+            className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl"
+          >
+            <h2 id="motivo-cancelamento-titulo" className="text-lg font-extrabold">
+              Qual o motivo do cancelamento?
+            </h2>
+            <p className="mt-1 text-sm text-gray-600">
+              {rotuloPedido(pedidoCancelando)} · {formatarMoeda(Number(pedidoCancelando.total))}
+            </p>
+            <form onSubmit={cancelarPedido} className="mt-4 space-y-3">
+              <fieldset className="space-y-2">
+                <legend className="sr-only">Motivo do cancelamento</legend>
+                {MOTIVOS_CANCELAMENTO.map((motivo) => (
+                  <label key={motivo} className="flex items-center gap-2 text-sm">
+                    <input
+                      type="radio"
+                      name="motivo-cancelamento"
+                      value={motivo}
+                      required
+                      checked={motivoCancelamento === motivo}
+                      onChange={() => setMotivoCancelamento(motivo)}
+                    />
+                    {motivo}
+                  </label>
+                ))}
+              </fieldset>
+              {motivoCancelamento === "Outro" && (
+                <label className="block text-sm font-semibold" htmlFor="outro-motivo-cancelamento">
+                  Descreva o motivo
+                  <input
+                    id="outro-motivo-cancelamento"
+                    type="text"
+                    required
+                    autoFocus
+                    maxLength={250}
+                    value={outroMotivo}
+                    onChange={(event) => setOutroMotivo(event.target.value)}
+                    className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
+                  />
+                </label>
+              )}
+              {erroCancelamento && (
+                <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                  {erroCancelamento}
+                </p>
+              )}
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  disabled={salvandoCancelamento}
+                  onClick={() => setPedidoCancelando(null)}
+                  className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold disabled:opacity-50"
+                >
+                  Voltar
+                </button>
+                <button
+                  type="submit"
+                  disabled={salvandoCancelamento}
+                  className="rounded-lg bg-red-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50"
+                >
+                  {salvandoCancelamento ? "Cancelando..." : "Confirmar cancelamento"}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
       )}
     </div>
   );

@@ -84,7 +84,7 @@ function imprimirExtratoNoNavegador(dados: DadosExtrato): string {
   return "Extrato enviado para impressão pelo navegador.";
 }
 
-function rotuloPedidoQz(pedido: Pick<Order, "numero_pedido"> & { customer_name?: string | null }): string {
+function rotuloPedidoQz(pedido: { numero_pedido?: number | null; customer_name?: string | null }): string {
   const numero = Number(pedido.numero_pedido);
   const base = Number.isSafeInteger(numero) && numero > 0 ? `Pedido ${numero}` : "Pedido sem número";
   const nome = (pedido.customer_name ?? "").trim();
@@ -321,7 +321,9 @@ export async function imprimirExtratoQz(dados: DadosExtrato, config: ConfigImpre
   return operacao;
 }
 
-export async function imprimirPedidoAutomatico(pedido: Order): Promise<{ mensagem: string; erro: boolean }> {
+export async function imprimirPedidoAutomatico(
+  pedido: Pick<Order, "id"> & Partial<Pick<Order, "numero_pedido" | "customer_name">>
+): Promise<{ mensagem: string; erro: boolean }> {
   try {
     const sessao = getSessao();
     if (!sessao) throw new Error("Sessão da loja não encontrada.");

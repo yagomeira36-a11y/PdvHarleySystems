@@ -23,10 +23,26 @@ export function lerCategorias(lojaId: string): string[] {
       (c: unknown): c is string => typeof c === "string" && c.trim() !== ""
     );
     const unicas = Array.from(new Set(lista));
-    return unicas.length > 0 ? unicas : [...CATEGORIAS_PADRAO];
+    return unicas;
   } catch {
     return [...CATEGORIAS_PADRAO];
   }
+}
+
+export function inicializarCategorias(
+  lojaId: string,
+  categoriasProdutos: string[]
+): string[] {
+  if (localStorage.getItem(chaveCategorias(lojaId)) !== null) {
+    return lerCategorias(lojaId);
+  }
+  const lista = Array.from(new Set([
+    ...CATEGORIAS_PADRAO,
+    ...categoriasProdutos
+      .filter((categoria) => typeof categoria === "string" && categoria.trim() !== "" && categoria !== "TODOS"),
+  ]));
+  salvarCategorias(lojaId, lista);
+  return lista;
 }
 
 export function salvarCategorias(lojaId: string, lista: string[]) {

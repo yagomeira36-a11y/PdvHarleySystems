@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { getSessao, normalizarTelefone } from "@/lib/supabase";
-import { lerZonas, salvarZonas, novoIdZona, type Zona } from "@/lib/zonas";
+import DeliveryZonesMap from "./DeliveryZonesMap";
 
 type StoreSettings = {
   nome_loja: string;
@@ -24,7 +24,6 @@ type StoreSettings = {
   entrega_max: number;
   retirada_min: number;
   retirada_max: number;
-  taxa_entrega: number;
   permitir_entrega: boolean;
   permitir_retirada: boolean;
   apps: {
@@ -35,11 +34,7 @@ type StoreSettings = {
     outros: Array<{ id: string; nome: string; link: string; icone: string }>;
   };
   horarios: Record<"segunda" | "terca" | "quarta" | "quinta" | "sexta" | "sabado" | "domingo", { ativo: boolean; abre: string; fecha: string }>;
-  raios: Array<{ id: string; raioKm: number; taxa: number }>;
-  entrega_gratis_acima: number;
-  fora_raio_tipo: "nao_atender" | "taxa";
-  fora_raio_taxa: number;
-  delivery_center: { lat: number; lng: number };
+  fora_raio_tipo: "nao_atender";
 };
 
 const APPS_VAZIOS: StoreSettings["apps"] = {
@@ -80,16 +75,11 @@ const VAZIO: StoreSettings = {
   entrega_max: 50,
   retirada_min: 20,
   retirada_max: 35,
-  taxa_entrega: 0,
   permitir_entrega: true,
   permitir_retirada: true,
   apps: APPS_VAZIOS,
   horarios: HORARIOS_VAZIOS,
-  raios: [],
-  entrega_gratis_acima: 0,
   fora_raio_tipo: "nao_atender",
-  fora_raio_taxa: 0,
-  delivery_center: { lat: -23.5505, lng: -46.6333 },
 };
 
 export default function LojaOnline() {
@@ -106,16 +96,22 @@ export default function LojaOnline() {
       const resposta = await fetch("/api/store-settings", { cache: "no-store" });
       if (!resposta.ok) return;
       const salvo = await resposta.json();
-      const zonasLocais = lerZonas(sessao.id);
+      const camposLegados = new Set([
+        "raios",
+        "taxas_raio",
+        "delivery_center",
+        "taxa_entrega",
+        "entrega_gratis_acima",
+        "fora_raio_taxa",
+      ]);
+      const salvoAtual = Object.fromEntries(
+        Object.entries(salvo).filter(([campo]) => !camposLegados.has(campo))
+      ) as Partial<StoreSettings>;
       setDados({
         ...VAZIO,
-        ...salvo,
+        ...salvoAtual,
         horarios: { ...HORARIOS_VAZIOS, ...(salvo.horarios || {}) },
-        raios: Array.isArray(salvo.raios) ? salvo.raios : zonasLocais.zonas,
-        entrega_gratis_acima: Number(salvo.entrega_gratis_acima || 0),
-        fora_raio_tipo: salvo.fora_raio_tipo === "taxa" ? "taxa" : "nao_atender",
-        fora_raio_taxa: Number(salvo.fora_raio_taxa || 0),
-        delivery_center: salvo.delivery_center || { lat: zonasLocais.lat, lng: zonasLocais.lng },
+        fora_raio_tipo: "nao_atender",
         apps: {
           ...APPS_VAZIOS,
           ...(salvo.apps || {}),
@@ -200,13 +196,6 @@ export default function LojaOnline() {
     }));
   }
 
-  function adicionarRaio() {
-    setDados((atual) => ({
-      ...atual,
-      raios: [...atual.raios, { id: novoIdZona(), raioKm: 2, taxa: 0 }],
-    }));
-  }
-
   async function salvar() {
     if (!sessao) return;
     setSalvando(true);
@@ -226,11 +215,6 @@ export default function LojaOnline() {
     setSalvando(false);
     if (!resposta.ok) setMensagem(resultado?.error || "Não foi possível salvar.");
     else {
-      salvarZonas(sessao.id, {
-        lat: dados.delivery_center.lat,
-        lng: dados.delivery_center.lng,
-        zonas: dados.raios.map((zona) => ({ id: zona.id, raioKm: Number(zona.raioKm), taxa: Number(zona.taxa) })),
-      });
       setMensagem("Loja online atualizada!");
     }
   }
@@ -360,21 +344,18 @@ export default function LojaOnline() {
         </section>
 
         <section className="rounded-2xl border border-gray-200 bg-white p-5">
-          <h3 className="mb-4 font-black text-gray-900">Taxa por Raio de Entrega</h3>
-          <div className="space-y-2">
-            {dados.raios.map((raio, indice) => (
-              <div key={raio.id} className="grid gap-2 rounded-xl border border-gray-200 p-3 md:grid-cols-[1fr_1fr_40px]">
-                <label className="text-xs font-bold">Até (km)<input type="number" step="0.5" value={raio.raioKm} onChange={(e) => setDados((atual) => ({ ...atual, raios: atual.raios.map((item, i) => i === indice ? { ...item, raioKm: Number(e.target.value) } : item) }))} className={campo} /></label>
-                <label className="text-xs font-bold">Taxa (R$)<input type="number" step="0.01" value={raio.taxa} onChange={(e) => setDados((atual) => ({ ...atual, raios: atual.raios.map((item, i) => i === indice ? { ...item, taxa: Number(e.target.value) } : item) }))} className={campo} /></label>
-                <button type="button" onClick={() => setDados((atual) => ({ ...atual, raios: atual.raios.filter((_, i) => i !== indice) }))} className="text-xl text-red-500">×</button>
-              </div>
-            ))}
-          </div>
-          <button type="button" onClick={adicionarRaio} className="mt-3 rounded-lg border border-green-600 px-4 py-2 text-sm font-bold text-green-700">+ Adicionar novo raio</button>
-          <div className="mt-4 grid gap-3 md:grid-cols-3">
-            <label className="text-sm font-bold">Entrega grátis acima de R$<input type="number" step="0.01" value={dados.entrega_gratis_acima} onChange={(e) => alterar("entrega_gratis_acima", Number(e.target.value))} className={campo} /></label>
-            <label className="text-sm font-bold">Fora do raio<select value={dados.fora_raio_tipo} onChange={(e) => alterar("fora_raio_tipo", e.target.value as "nao_atender" | "taxa")} className={campo}><option value="nao_atender">Não atender</option><option value="taxa">Permitir com taxa</option></select></label>
-            {dados.fora_raio_tipo === "taxa" && <label className="text-sm font-bold">Taxa fora do raio (R$)<input type="number" step="0.01" value={dados.fora_raio_taxa} onChange={(e) => alterar("fora_raio_taxa", Number(e.target.value))} className={campo} /></label>}
+          <h3 className="mb-4 font-black text-gray-900">Zonas de entrega</h3>
+          <DeliveryZonesMap
+            lojaId={getSessao()?.id ?? ""}
+            enderecoLoja={dados.endereco}
+          />
+          <div className="mt-4 max-w-sm">
+            <label className="text-sm font-bold">
+              Fora do raio
+              <select value={dados.fora_raio_tipo} disabled className={campo}>
+                <option value="nao_atender">Não atender</option>
+              </select>
+            </label>
           </div>
         </section>
 
@@ -383,7 +364,6 @@ export default function LojaOnline() {
           <div className="grid gap-3 md:grid-cols-3">
             <label className="text-sm font-bold">Entrega: mínimo (min)<input type="number" value={dados.entrega_min} onChange={(e) => alterar("entrega_min", Number(e.target.value))} className={campo} /></label>
             <label className="text-sm font-bold">Entrega: máximo (min)<input type="number" value={dados.entrega_max} onChange={(e) => alterar("entrega_max", Number(e.target.value))} className={campo} /></label>
-            <label className="text-sm font-bold">Taxa de entrega (R$)<input type="number" step="0.01" value={dados.taxa_entrega} onChange={(e) => alterar("taxa_entrega", Number(e.target.value))} className={campo} /></label>
             <label className="text-sm font-bold">Retirada: mínimo (min)<input type="number" value={dados.retirada_min} onChange={(e) => alterar("retirada_min", Number(e.target.value))} className={campo} /></label>
             <label className="text-sm font-bold">Retirada: máximo (min)<input type="number" value={dados.retirada_max} onChange={(e) => alterar("retirada_max", Number(e.target.value))} className={campo} /></label>
             <div className="flex gap-4 pt-7 text-sm font-bold"><label className="flex gap-2"><input type="checkbox" checked={dados.permitir_entrega} onChange={(e) => alterar("permitir_entrega", e.target.checked)} />Permitir entrega</label><label className="flex gap-2"><input type="checkbox" checked={dados.permitir_retirada} onChange={(e) => alterar("permitir_retirada", e.target.checked)} />Permitir retirada</label></div>

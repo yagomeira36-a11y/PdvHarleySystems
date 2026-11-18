@@ -1,15 +1,16 @@
 // ============================================================
 // ZONAS DE ENTREGA (raios no mapa, estilo iFood)
-// A loja fica no centro (pin no mapa) e cada zona é um círculo
-// em volta dela com um raio (KM) e um valor de entrega (R$).
-// O sistema calcula a distância do cliente até a loja e usa a
-// zona certa automaticamente. Tudo salvo no navegador por loja.
+// As zonas e o centro da loja são compartilhados entre o PDV e o
+// cardápio online pelo endpoint de configurações da loja.
 // ============================================================
 
 export type Zona = {
   id: string;
+  nome: string;
+  cor: string;
   raioKm: number; // raio do círculo em KM
   taxa: number; // valor da entrega dessa zona em R$
+  ativo: boolean;
 };
 
 export type ConfigZonas = {
@@ -53,8 +54,31 @@ export function corZona(index: number): string {
 // Ordena as zonas do menor para o maior raio
 export function zonasOrdenadas(zonas: Zona[]): Zona[] {
   return [...zonas]
-    .filter((z) => z.raioKm > 0)
+    .filter((z) => Number.isFinite(z.raioKm) && z.raioKm > 0)
     .sort((a, b) => a.raioKm - b.raioKm);
+}
+
+export function normalizarDeliveryZones(valor: unknown): Zona[] {
+  if (!Array.isArray(valor)) return [];
+  return valor
+    .filter(
+      (zona): zona is Record<string, unknown> =>
+        !!zona && typeof zona === "object"
+    )
+    .map((zona, indice) => ({
+      id: typeof zona.id === "string" ? zona.id : novoIdZona(),
+      nome:
+        typeof zona.nome === "string" && zona.nome.trim()
+          ? zona.nome
+          : `Zona ${indice + 1}`,
+      cor:
+        typeof zona.cor === "string" && zona.cor
+          ? zona.cor
+          : corZona(indice),
+      raioKm: Number(zona.raioKm) || 0,
+      taxa: Number(zona.taxa ?? zona.valor) || 0,
+      ativo: typeof zona.ativo === "boolean" ? zona.ativo : true,
+    }));
 }
 
 // Lê as zonas salvas da loja (padrão quando nunca foi salvo)
@@ -63,19 +87,12 @@ export function lerZonas(lojaId: string): ConfigZonas {
     const bruto = localStorage.getItem(chaveZonas(lojaId));
     if (!bruto) return configZonasVazia();
     const salvo = JSON.parse(bruto);
-    const zonas: Zona[] = Array.isArray(salvo?.zonas)
-      ? salvo.zonas
-          .filter((z: unknown): z is Zona => !!z && typeof (z as Zona).raioKm !== "undefined")
-          .map((z: Zona) => ({
-            id: typeof z.id === "string" ? z.id : novoIdZona(),
-            raioKm: Number(z.raioKm) || 0,
-            taxa: Number(z.taxa) || 0,
-          }))
-      : [];
+    const lat = Number(salvo?.lat);
+    const lng = Number(salvo?.lng);
     return {
-      lat: Number(salvo?.lat) || CENTRO_PADRAO.lat,
-      lng: Number(salvo?.lng) || CENTRO_PADRAO.lng,
-      zonas,
+      lat: Number.isFinite(lat) ? lat : CENTRO_PADRAO.lat,
+      lng: Number.isFinite(lng) ? lng : CENTRO_PADRAO.lng,
+      zonas: normalizarDeliveryZones(salvo?.zonas),
     };
   } catch {
     return configZonasVazia();
@@ -84,6 +101,79 @@ export function lerZonas(lojaId: string): ConfigZonas {
 
 export function salvarZonas(lojaId: string, cfg: ConfigZonas) {
   localStorage.setItem(chaveZonas(lojaId), JSON.stringify(cfg));
+}
+
+export async function carregarDeliveryZones(
+  lojaId: string,
+  migrarZonasLocais = true
+): Promise<ConfigZonas> {
+  const local = lerZonas(lojaId);
+  const resposta = await fetch(
+    `/api/store-settings?loja=${encodeURIComponent(lojaId)}`,
+    { cache: "no-store" }
+  );
+  if (!resposta.ok) {
+    throw new Error("Não foi possível carregar as zonas de entrega.");
+  }
+  const settings = (await resposta.json()) as Record<string, unknown>;
+  const zonasRemotas = Array.isArray(settings.raios)
+    ? normalizarDeliveryZones(settings.raios)
+    : Array.isArray(settings.taxas_raio)
+      ? normalizarDeliveryZones(settings.taxas_raio)
+      : null;
+  const centro =
+    settings.delivery_center && typeof settings.delivery_center === "object"
+      ? (settings.delivery_center as Record<string, unknown>)
+      : null;
+  const lat = Number(centro?.lat);
+  const lng = Number(centro?.lng);
+  const config: ConfigZonas = {
+    lat: Number.isFinite(lat) ? lat : local.lat,
+    lng: Number.isFinite(lng) ? lng : local.lng,
+    zonas: zonasRemotas ?? (migrarZonasLocais ? local.zonas : []),
+  };
+
+  if (
+    migrarZonasLocais &&
+    zonasRemotas &&
+    zonasRemotas.length === 0 &&
+    local.zonas.length > 0
+  ) {
+    await salvarDeliveryZones(lojaId, { ...config, zonas: local.zonas });
+    return { ...config, zonas: local.zonas };
+  }
+
+  salvarZonas(lojaId, config);
+  return config;
+}
+
+export async function salvarDeliveryZones(
+  lojaId: string,
+  config: ConfigZonas
+): Promise<void> {
+  const zonas = normalizarDeliveryZones(config.zonas);
+  const resposta = await fetch("/api/store-settings", {
+    method: "POST",
+    cache: "no-store",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      raios: zonas,
+      delivery_center: { lat: config.lat, lng: config.lng },
+    }),
+  });
+  const resultado = (await resposta.json().catch(() => null)) as
+    | { error?: string }
+    | null;
+  if (!resposta.ok) {
+    throw new Error(resultado?.error || "Não foi possível salvar as zonas.");
+  }
+  const salva = { ...config, zonas };
+  salvarZonas(lojaId, salva);
+  window.dispatchEvent(
+    new CustomEvent("pdv-delivery-zones-atualizado", {
+      detail: { lojaId, config: salva },
+    })
+  );
 }
 
 // Distância em KM entre dois pontos (fórmula de Haversine)
@@ -107,7 +197,7 @@ export function distanciaKm(
 // Descobre a zona certa para uma distância
 // (a menor zona cujo raio cobre a distância)
 export function zonaParaDistancia(distKm: number, zonas: Zona[]): Zona | null {
-  for (const z of zonasOrdenadas(zonas)) {
+  for (const z of zonasOrdenadas(zonas).filter((zona) => zona.ativo)) {
     if (distKm <= z.raioKm) return z;
   }
   return null; // fora de todas as zonas

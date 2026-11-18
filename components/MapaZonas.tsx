@@ -89,11 +89,11 @@ export default function MapaZonas({
 
       camada.clearLayers();
 
-      const ordenadas = zonasOrdenadas(zonas);
+      const ordenadas = zonasOrdenadas(zonas).filter((zona) => zona.ativo);
 
       // Círculos (do maior para o menor, para o menor ficar por cima)
       [...ordenadas].reverse().forEach((z) => {
-        const cor = corZona(ordenadas.findIndex((x) => x.id === z.id));
+        const cor = z.cor || corZona(ordenadas.findIndex((x) => x.id === z.id));
         L.circle([lat, lng], {
           radius: z.raioKm * 1000, // metros
           color: cor,
@@ -110,7 +110,7 @@ export default function MapaZonas({
           fillOpacity: 0,
         })
           .addTo(camada)
-          .bindTooltip(`até ${z.raioKm} km • ${formatarReal(z.taxa)}`, {
+          .bindTooltip(`${z.nome} • até ${z.raioKm} km • ${formatarReal(z.taxa)}`, {
             permanent: true,
             direction: "top",
             className: "zona-tooltip",

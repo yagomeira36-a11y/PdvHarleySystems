@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabase, normalizarTelefone } from "@/lib/supabase";
+import { getWhatsAppAdminClient } from "@/lib/whatsapp/server";
 
 export const dynamic = "force-dynamic";
 
@@ -152,7 +153,20 @@ export async function POST(request: NextRequest) {
   let notificacao: "enviada" | "nao_configurada" | "falhou" = "nao_configurada";
   const evolutionUrl = process.env.EVOLUTION_API_URL?.replace(/\/+$/, "");
   const evolutionKey = process.env.EVOLUTION_API_KEY;
-  const evolutionInstance = process.env.EVOLUTION_INSTANCE;
+  const whatsappAdmin = getWhatsAppAdminClient();
+  const { data: whatsappSettings, error: erroWhatsapp } = whatsappAdmin
+    ? await whatsappAdmin
+        .from("whatsapp_ai_settings")
+        .select("instance_name,connection_status")
+        .eq("loja_id", lojaId)
+        .maybeSingle()
+    : { data: null, error: null };
+  if (erroWhatsapp) {
+    console.error("Falha ao carregar instância WhatsApp da loja:", erroWhatsapp.message);
+  }
+  const evolutionInstance = whatsappSettings?.connection_status === "connected"
+    ? whatsappSettings.instance_name
+    : null;
   if (evolutionUrl && evolutionKey && evolutionInstance) {
     try {
       const resposta = await fetch(

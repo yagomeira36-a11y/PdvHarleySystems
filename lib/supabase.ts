@@ -56,6 +56,8 @@ export type Order = {
   forma_pagamento?: string | null; // forma de pagamento (dinheiro, pix...)
   numero_pedido?: number | null;
   observacao?: string | null;
+  motivo_cancelamento?: string | null;
+  cancelado_em?: string | null;
   items?: Array<{
     product_id: string;
     name: string;
@@ -118,6 +120,7 @@ export type Configuracao = {
   telefone: string | null;
   endereco: string | null;
   taxa_entrega_padrao: number;
+  modelo_comanda?: string | null;
   whatsapp?: string | null;
   logo_url?: string | null;
   cardapio_aberto?: boolean;

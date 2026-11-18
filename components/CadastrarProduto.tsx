@@ -15,7 +15,7 @@ import {
   Categoria,
 } from "@/lib/supabase";
 import { CATEGORIAS_PADRAO, lerCategorias } from "@/lib/categorias";
-import { ItemFoto, lerCardapioDaFoto } from "@/lib/cardapio-foto";
+import { lerCardapioDaFoto } from "@/lib/cardapio-foto";
 
 // Campos do formulário (texto para facilitar a digitação)
 type FormProduto = {
@@ -31,6 +31,7 @@ type FormProduto = {
 type ItemRevisao = {
   nome: string;
   preco: string;
+  descricao: string;
   codigo: string;
   categoria: Categoria;
   incluir: boolean;
@@ -45,6 +46,16 @@ const FORM_VAZIO: FormProduto = {
   descricao: "",
   disponivel: true,
 };
+
+function mensagemColunaProdutoAusente(erro: string): string | null {
+  const colunaAusente =
+    /Could not find the '(available|description)' column of 'products' in the schema cache/i.exec(erro)?.[1] ||
+    /column\s+(?:public\.)?products\.(available|description)\s+does not exist/i.exec(erro)?.[1];
+  if (!colunaAusente) return null;
+
+  const campo = colunaAusente === "description" ? "descrição" : "disponibilidade";
+  return `O banco ainda não tem a coluna de ${campo} dos produtos. No SQL Editor do Supabase, execute supabase/disponibilidade-produtos.sql e tente novamente.`;
+}
 
 export default function CadastrarProduto() {
   const supabase = getSupabase();
@@ -63,6 +74,7 @@ export default function CadastrarProduto() {
   const [lendoFoto, setLendoFoto] = useState(false); // OCR em andamento
   const [progressoFoto, setProgressoFoto] = useState(0); // 0 a 100
   const [itensRevisao, setItensRevisao] = useState<ItemRevisao[]>([]);
+  const [textoBrutoFoto, setTextoBrutoFoto] = useState("");
   const [importando, setImportando] = useState(false);
 
   // ============================================================
@@ -151,11 +163,21 @@ export default function CadastrarProduto() {
 
     const primeira = await executar(completo);
     if (primeira.error) {
+      const erroColunaProduto = mensagemColunaProdutoAusente(primeira.error.message);
+      if (erroColunaProduto) {
+        setMensagem(erroColunaProduto);
+        return;
+      }
       if (bloqueadaPorEnum(primeira.error.message)) return;
       // "Could not find the 'x' column" = schema novo (sem colunas pt-BR)
       if (primeira.error.message.includes("Could not find the")) {
         const segunda = await executar(dados);
         if (segunda.error) {
+          const erroColunaProduto = mensagemColunaProdutoAusente(segunda.error.message);
+          if (erroColunaProduto) {
+            setMensagem(erroColunaProduto);
+            return;
+          }
           if (bloqueadaPorEnum(segunda.error.message)) return;
           setMensagem(
             (editandoId ? "Erro ao atualizar: " : "Erro ao cadastrar: ") +
@@ -231,6 +253,7 @@ export default function CadastrarProduto() {
     if (fotoUrl) URL.revokeObjectURL(fotoUrl);
     setFotoUrl(URL.createObjectURL(arquivo));
     setItensRevisao([]);
+    setTextoBrutoFoto("");
     setMensagem(null);
     void lerFoto(arquivo);
   }
@@ -240,10 +263,12 @@ export default function CadastrarProduto() {
     setLendoFoto(true);
     setProgressoFoto(0);
     try {
-      const itens: ItemFoto[] = await lerCardapioDaFoto(arquivo, setProgressoFoto);
+      const resultado = await lerCardapioDaFoto(arquivo, setProgressoFoto);
+      const { itens, textoBruto, linhasLidas } = resultado;
+      setTextoBrutoFoto(textoBruto);
       if (itens.length === 0) {
         setMensagem(
-          "Não encontrei itens com preço nessa foto. Tente uma imagem mais nítida e reta."
+          `Consegui ler ${linhasLidas} linhas, mas nenhum preço válido. Tente tirar a foto mais perto, reta e com boa luz`
         );
         return;
       }
@@ -253,6 +278,7 @@ export default function CadastrarProduto() {
         itens.map((it) => ({
           nome: it.nome,
           preco: it.preco.toFixed(2).replace(".", ","),
+          descricao: it.descricao,
           codigo: String(proximo++),
           categoria: form.categoria,
           incluir: true,
@@ -283,13 +309,24 @@ export default function CadastrarProduto() {
     if (fotoUrl) URL.revokeObjectURL(fotoUrl);
     setFotoUrl(null);
     setItensRevisao([]);
+    setTextoBrutoFoto("");
     setProgressoFoto(0);
+  }
+
+  function removerItem(index: number) {
+    setItensRevisao((lista) => lista.filter((_, i) => i !== index));
   }
 
   // Insere vários produtos de uma vez (com o mesmo plano B do cadastro:
   // tabela antiga com colunas em português)
   async function inserirProdutos(
-    lista: { name: string; price: number; category: string; code: number }[]
+    lista: {
+      name: string;
+      price: number;
+      description: string;
+      category: string;
+      code: number;
+    }[]
   ): Promise<string | null> {
     if (!supabase) return "Sem conexão com o banco.";
     const sessao = getSessao();
@@ -300,6 +337,7 @@ export default function CadastrarProduto() {
       nome: d.name,
       preco: d.price,
       codigo: d.code,
+      descricao: d.description,
     }));
 
     const primeira = await supabase.from("products").insert(completo);
@@ -324,12 +362,21 @@ export default function CadastrarProduto() {
     }
     const lista = marcados.map((i) => ({
       name: i.nome.trim(),
-      price: parseFloat(i.preco.replace(",", ".")) || 0,
+      price: Number(i.preco.trim().replace(",", ".")),
+      description: i.descricao,
       category: i.categoria,
       code: parseInt(i.codigo) || 0,
     }));
     if (lista.some((d) => !d.name)) {
       setMensagem("Todo item precisa de um nome.");
+      return;
+    }
+    if (
+      lista.some(
+        (d) => !Number.isFinite(d.price) || d.price < 1 || d.price > 999
+      )
+    ) {
+      setMensagem("Informe preços válidos entre R$ 1,00 e R$ 999,00.");
       return;
     }
     if (lista.some((d) => !d.code)) {
@@ -532,6 +579,7 @@ export default function CadastrarProduto() {
                     <th className="px-2 py-2 w-28">Preço (R$)</th>
                     <th className="px-2 py-2 w-24">Código</th>
                     <th className="px-2 py-2 w-40">Categoria</th>
+                    <th className="px-2 py-2 w-20">Ação</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
@@ -597,6 +645,16 @@ export default function CadastrarProduto() {
                           ))}
                         </select>
                       </td>
+                      <td className="px-2 py-1.5">
+                        <button
+                          type="button"
+                          onClick={() => removerItem(i)}
+                          className="text-red-600 hover:text-red-800 underline"
+                          aria-label={`Excluir ${it.nome}`}
+                        >
+                          Excluir
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -612,6 +670,17 @@ export default function CadastrarProduto() {
                 ? "Importando…"
                 : `Importar ${itensRevisao.filter((i) => i.incluir).length} produto(s)`}
             </button>
+          </div>
+        )}
+
+        {fotoUrl && !lendoFoto && (
+          <div className="mt-4 rounded-lg border border-amber-300 bg-amber-50 p-3">
+            <p className="text-sm font-semibold text-amber-900">
+              Texto bruto lido pelo OCR (para diagnóstico):
+            </p>
+            <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs text-gray-700">
+              {textoBrutoFoto || "(nenhum texto reconhecido)"}
+            </pre>
           </div>
         )}
       </div>
@@ -661,7 +730,12 @@ export default function CadastrarProduto() {
                       if (!supabase) return;
                       const novoDisponivel = p.available === false;
                       const { error } = await supabase.from("products").update({ available: novoDisponivel }).eq("id", p.id);
-                      if (error) setMensagem("Erro ao atualizar disponibilidade: " + error.message);
+                      if (error) {
+                        setMensagem(
+                          mensagemColunaProdutoAusente(error.message) ||
+                            "Erro ao atualizar disponibilidade: " + error.message
+                        );
+                      }
                       else {
                         setMensagem(novoDisponivel ? "Produto disponível no cardápio!" : "Produto pausado no cardápio!");
                         carregar();
