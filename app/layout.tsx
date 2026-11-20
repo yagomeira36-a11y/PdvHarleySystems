@@ -1,5 +1,6 @@
 // Layout raiz da aplicação
 import type { Metadata } from "next";
+import CapacitorRuntime from "@/components/CapacitorRuntime";
 import "./globals.css";
 
 // Título exibido na aba do navegador
@@ -15,7 +16,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="pt-BR">
-      <body>{children}</body>
+      <body>
+        <CapacitorRuntime />
+        {children}
+      </body>
     </html>
   );
 }

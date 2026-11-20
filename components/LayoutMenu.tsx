@@ -1,14 +1,13 @@
 "use client";
 
 // ============================================================
-// LAYOUT COMPARTILHADO PdvDaGalera (usado por todas as páginas)
+// LAYOUT COMPARTILHADO Ponto De Vendas Harley Systems (usado por todas as páginas)
 // - Sidebar azul com gradiente #2563EB -> #1D4ED8
-// - Logo "PdvDaGalera" + box do administrador
+// - Identidade visual Harley Systems + box do administrador
 // - Menu: Mesa, Balcão, Delivery, KDS, Finalizados,
 //   Gerenciamento de loja e Configurações
 //   (Cadastrar Produto, Estoque, Caixa e Relatórios ficam dentro de
-//   "Gerenciamento de loja"; Layout, Motoboys e Bot Assistente dentro
-//   de "Configurações")
+//   "Gerenciamento de loja"; Layout e Motoboys dentro de "Configurações")
 // - Botões ABERTO e CARDÁPIO no rodapé da sidebar
 // - Área principal clara com o conteúdo da página
 // ============================================================
@@ -16,9 +15,9 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { getSupabase, getSessao, limparSessao, Sessao } from "@/lib/supabase";
-import { imprimirPedidoAutomatico } from "@/lib/qz";
 import { lojaSemAcesso } from "@/lib/acesso-loja";
 import { caixaEstaAberto, chaveCaixas, MENSAGEM_CAIXA_FECHADO } from "@/lib/caixa";
+import { imprimirPedidoAutomatico } from "@/lib/qz";
 import {
   LayoutConfig,
   MenuGrupo,
@@ -243,10 +242,9 @@ export default function LayoutMenu({ ativo, children, refreshKey = 0, aoPedidoCr
   // Pedidos pendentes na cozinha (badge do item "KDS (Cozinha)")
   const [pendentes, setPendentes] = useState<number>(0);
   const pedidosAtivosRef = useRef<Set<string> | null>(null);
-  const tentativasImpressaoWhatsApp = useRef(new Map<string, number>());
-  const impressoesWhatsAppEmCurso = useRef(new Set<string>());
-  const pedidosWhatsAppImpressos = useRef(new Set<string>());
-  const aoPedidoCriadoRef = useRef(aoPedidoCriado);
+  // Pedidos da loja online já reivindicados para impressão nesta aba
+  const onlineTentadosRef = useRef<Set<string>>(new Set());
+  const [avisoOnline, setAvisoOnline] = useState<string | null>(null);
   const [caixaLiberado, setCaixaLiberado] = useState(false);
 
   // Cardápio aberto (imagem configurada na tela Layout)
@@ -264,10 +262,6 @@ export default function LayoutMenu({ ativo, children, refreshKey = 0, aoPedidoCr
     window.addEventListener("keydown", aoTeclar);
     return () => window.removeEventListener("keydown", aoTeclar);
   }, [cardapioAberto]);
-
-  useEffect(() => {
-    aoPedidoCriadoRef.current = aoPedidoCriado;
-  }, [aoPedidoCriado]);
 
   useEffect(() => {
     function atualizarCaixa() {
@@ -385,19 +379,47 @@ export default function LayoutMenu({ ativo, children, refreshKey = 0, aoPedidoCr
       });
 
     let ativo = true;
-    const inicioMonitoramento = Date.now();
     let ultimoErroMonitoramento = "";
+    type PedidoOnline = {
+      id: string;
+      status: string;
+      numero_pedido?: number | null;
+      customer_name?: string | null;
+    };
+    // Pedido chegou pela loja online (status "novo"): reivindica no banco e
+    // imprime direto. A reivindicação (novo -> pendente) garante que, se o
+    // PDV estiver aberto em mais de uma tela/dispositivo, só um imprime o cupom.
+    async function imprimirPedidoOnline(pedido: PedidoOnline) {
+      const id = String(pedido.id);
+      if (onlineTentadosRef.current.has(id)) return;
+      if (!caixaEstaAberto(lojaId)) return; // caixa fechado: deixa para a próxima verificação
+      onlineTentadosRef.current.add(id);
+      const { data: reivindicado, error: erroReivindicacao } = await db
+        .from("orders")
+        .update({ status: "pendente" })
+        .eq("id", id)
+        .eq("loja_id", lojaId)
+        .eq("status", "novo")
+        .select("id");
+      if (erroReivindicacao || !reivindicado?.length) return; // outra tela já assumiu
+      const resultado = await imprimirPedidoAutomatico({
+        id,
+        numero_pedido: pedido.numero_pedido,
+        customer_name: pedido.customer_name,
+      });
+      if (resultado.erro) setAvisoOnline(resultado.mensagem);
+    }
     async function atualizarPedidos() {
       const { data, error } = await db
         .from("orders")
-        .select("id,origem,numero_pedido,customer_name,created_at")
+        .select("id,status,numero_pedido,customer_name")
         .eq("loja_id", lojaId)
         .in("status", ["pendente", "novo"]);
       if (!ativo) return;
       if (error || !data) {
         const mensagemErro = error?.message || "A consulta retornou vazia.";
         if (mensagemErro !== ultimoErroMonitoramento) {
-          console.error("[PDV] Falha ao verificar novos pedidos do WhatsApp:", mensagemErro);
+          console.error("[PDV] Falha ao verificar novos pedidos:", mensagemErro);
           ultimoErroMonitoramento = mensagemErro;
         }
         return;
@@ -408,47 +430,17 @@ export default function LayoutMenu({ ativo, children, refreshKey = 0, aoPedidoCr
       if (anteriores && Array.from(idsAtivos).some((id) => !anteriores.has(id)) && document.visibilityState === "visible") {
         tocarSomPedidoNovo();
       }
-      const agora = Date.now();
-      const pedidosNovosWhatsApp = data.filter((pedido) => {
-        if (pedido.origem !== "IA WhatsApp") return false;
-        const criadoEm = new Date(String(pedido.created_at)).getTime();
-        return anteriores
-          ? !anteriores.has(String(pedido.id))
-          : Number.isFinite(criadoEm) && criadoEm >= inicioMonitoramento - 60_000 && criadoEm <= agora;
-      });
-      for (const pedido of pedidosNovosWhatsApp) {
-        const id = String(pedido.id);
-        if (
-          pedidosWhatsAppImpressos.current.has(id) ||
-          impressoesWhatsAppEmCurso.current.has(id) ||
-          (tentativasImpressaoWhatsApp.current.get(id) || 0) >= 3
-        ) continue;
-        tentativasImpressaoWhatsApp.current.set(
-          id,
-          (tentativasImpressaoWhatsApp.current.get(id) || 0) + 1
-        );
-        impressoesWhatsAppEmCurso.current.add(id);
-        void imprimirPedidoAutomatico({
-          id,
-          numero_pedido: pedido.numero_pedido,
-          customer_name: pedido.customer_name,
-        }).then((resultado) => {
-          if (!ativo) return;
-          impressoesWhatsAppEmCurso.current.delete(id);
-          if (!resultado.erro) {
-            pedidosWhatsAppImpressos.current.add(id);
-            aoPedidoCriadoRef.current?.(resultado.mensagem, "ok");
-          } else if ((tentativasImpressaoWhatsApp.current.get(id) || 0) >= 3) {
-            aoPedidoCriadoRef.current?.(resultado.mensagem, "erro");
-          }
-        });
-      }
       pedidosAtivosRef.current = idsAtivos;
       setPendentes(idsAtivos.size);
+      for (const pedido of data as PedidoOnline[]) {
+        if (pedido.status === "novo") void imprimirPedidoOnline(pedido);
+      }
     }
     void atualizarPedidos();
+    // Roda sempre (mesmo com a aba em segundo plano), pois o pedido da loja
+    // online precisa ser reivindicado e impresso sem depender de estar visível.
     const intervaloPedidos = window.setInterval(() => {
-      if (document.visibilityState === "visible") void atualizarPedidos();
+      void atualizarPedidos();
     }, 3000);
     return () => {
       ativo = false;
@@ -539,7 +531,7 @@ export default function LayoutMenu({ ativo, children, refreshKey = 0, aoPedidoCr
             </button>
           </div>
           {!minimizada && (
-            <p className="text-xs opacity-70 mt-3">Ponto de Venda Da Galera</p>
+            <p className="text-xs opacity-70 mt-3">Ponto De Vendas Harley Systems</p>
           )}
         </div>
 
@@ -696,6 +688,25 @@ export default function LayoutMenu({ ativo, children, refreshKey = 0, aoPedidoCr
           children
         )}
       </main>
+
+      {/* Aviso: pedido da loja online chegou, mas a impressão automática falhou */}
+      {avisoOnline && (
+        <div className="fixed bottom-4 right-4 z-[60] max-w-sm rounded-2xl border border-red-300 bg-red-50 p-4 shadow-xl">
+          <div className="flex items-start justify-between gap-3">
+            <p className="text-sm font-bold text-red-800">
+              Pedido da loja online não imprimiu automaticamente
+            </p>
+            <button
+              onClick={() => setAvisoOnline(null)}
+              aria-label="Dispensar aviso"
+              className="shrink-0 rounded-lg bg-red-100 px-2 py-1 text-xs font-bold text-red-700 hover:bg-red-200"
+            >
+              OK
+            </button>
+          </div>
+          <p className="mt-2 text-xs text-red-700">{avisoOnline}</p>
+        </div>
+      )}
     </div>
   );
 }

@@ -28,6 +28,7 @@ import {
   Motoboy,
   Cliente,
 } from "@/lib/supabase";
+import { hojeISO } from "@/lib/fiado";
 import { lerPagamentos } from "@/lib/pagamentos";
 import type { Order } from "@/lib/supabase";
 import { imprimirPedidoAutomatico } from "@/lib/qz";
@@ -58,6 +59,26 @@ import {
   zonaParaDistancia,
   zonasOrdenadas,
 } from "@/lib/zonas";
+import {
+  contarPedidosOffline,
+  guardarCacheOffline,
+  guardarPedidoOffline,
+  lerCacheOffline,
+  type OfflineOrderRecord,
+} from "@/lib/offline-pdv";
+
+type ResultadoFiado = { mensagem: string; erro: boolean };
+type DadosPedidoOffline = {
+  type: Order["type"];
+  total: number;
+  customer_name: string | null;
+  address: string | null;
+  complemento?: string | null;
+  telefone?: string | null;
+  delivery_fee: number;
+  mesa_numero?: number | null;
+  motoboyId?: string;
+};
 
 // ItemCarrinho continua exportado daqui (compatibilidade com a página PDV)
 export type { ItemCarrinho };
@@ -107,6 +128,8 @@ export default function Balcao({ aoPedidoCriado }: Props) {
   const [comandas, setComandas] = useState<Comanda[]>([]);
   const [ativaId, setAtivaId] = useState("");
   const [carregado, setCarregado] = useState(false);
+  const [conectado, setConectado] = useState(true);
+  const [pedidosOffline, setPedidosOffline] = useState(0);
 
   // Estados da tela
   const [produtos, setProdutos] = useState<Product[]>([]); // cardápio completo
@@ -121,20 +144,67 @@ export default function Balcao({ aoPedidoCriado }: Props) {
   const [erroForm, setErroForm] = useState<string | null>(null); // erro do modal
   const [enviando, setEnviando] = useState(false); // trava durante gravação
   const finalizacaoEmCurso = useRef(false);
+  const callbackPedidoRef = useRef(aoPedidoCriado);
   const pedidoGravado = useRef<Order | null>(null);
   const [falhaImpressao, setFalhaImpressao] = useState<{ pedido: Order; mensagem: string } | null>(null);
 
-  async function concluirPedido(pedido: Order, texto: string) {
+  async function concluirPedido(
+    pedido: Order,
+    texto: string,
+    avisoFiado: ResultadoFiado = { mensagem: "", erro: false }
+  ) {
     const resultado = await imprimirPedidoAutomatico(pedido);
     setFalhaImpressao(resultado.erro ? { pedido, mensagem: resultado.mensagem } : null);
-    aoPedidoCriado(resultado.erro ? resultado.mensagem : `${texto} Comprovante e comanda enviados ao QZ Tray.`, resultado.erro ? "erro" : "ok");
+    const mensagem = resultado.erro
+      ? `${resultado.mensagem}${avisoFiado.mensagem ? ` ${avisoFiado.mensagem}` : ""}`
+      : `${texto} Comprovante e comanda enviados ao QZ Tray.${avisoFiado.mensagem ? ` ${avisoFiado.mensagem}` : ""}`;
+    aoPedidoCriado(mensagem, resultado.erro || avisoFiado.erro ? "erro" : "ok");
     if (!resultado.erro) router.push("/pdv?aba=kds");
+  }
+
+  useEffect(() => {
+    callbackPedidoRef.current = aoPedidoCriado;
+  }, [aoPedidoCriado]);
+
+  function pagamentoEhFiado(forma: string): boolean {
+    return forma.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase().includes("fiado");
+  }
+
+  async function registrarFiadoDoPedido(pedido: Order, comandaPedido: Comanda, lojaId: string): Promise<ResultadoFiado> {
+    if (!pagamentoEhFiado(comandaPedido.formaPagamento)) return { mensagem: "", erro: false };
+    if (!supabase) throw new Error("Conexão com o banco indisponível para registrar o fiado.");
+
+    const descricaoItens = comandaPedido.carrinho
+      .map((item) => `${item.qty}x ${item.product.name}`)
+      .join(", ");
+    const { error } = await supabase.from("fiados").insert({
+      loja_id: lojaId,
+      cliente_nome: comandaPedido.cliente.trim(),
+      cliente_telefone: normalizarTelefone(comandaPedido.telefone) || null,
+      tipo: "divida",
+      valor: Number(pedido.total),
+      descricao: `${rotuloPedido(pedido)}: ${descricaoItens}`,
+      data: hojeISO(),
+    });
+
+    if (error) {
+      console.error("Pedido fiado criado, mas não foi possível registrar a dívida:", error.message);
+      return {
+        mensagem: "Atenção: o pedido foi criado, mas não foi possível registrar o débito na tela Fiado.",
+        erro: true,
+      };
+    }
+    return { mensagem: "Débito registrado em Fiado.", erro: false };
   }
 
   async function finalizarPedido() {
     if (finalizacaoEmCurso.current) return;
     if (!comanda) return;
     if (!comanda.carrinho.length) { aoPedidoCriado("Adicione itens ao carrinho primeiro.", "erro"); return; }
+    if (pagamentoEhFiado(comanda.formaPagamento) && !comanda.cliente.trim()) {
+      aoPedidoCriado("Informe o nome do cliente para registrar o pedido no Fiado.", "erro");
+      return;
+    }
     finalizacaoEmCurso.current = true;
     pedidoGravado.current = null;
     try {
@@ -143,7 +213,7 @@ export default function Balcao({ aoPedidoCriado }: Props) {
       else await finalizarBalcao();
     } catch (erro) {
       const salvo = pedidoGravado.current as Order | null;
-      if (salvo) removerComanda(comanda.id);
+      if (salvo) retirarComanda(comanda.id);
       const mensagem = `${salvo ? `${rotuloPedido(salvo)} já registrado, mas a finalização ficou incompleta.` : "Não foi possível confirmar a gravação do pedido."} ${erro instanceof Error ? erro.message : "Falha de comunicação."} Confira o Caixa antes de tentar novamente. Nenhum documento foi enviado automaticamente.`;
       setErroBalcao(mensagem);
       setErroForm(mensagem);
@@ -231,15 +301,7 @@ export default function Balcao({ aoPedidoCriado }: Props) {
     setResultadoEntrega(null);
   }
 
-  // Fecha/descarta uma comanda
-  function removerComanda(id: string) {
-    const alvo = comandas.find((c) => c.id === id);
-    if (alvo && alvo.carrinho.length > 0) {
-      const confirmou = window.confirm(
-        `Descartar o ${rotuloComanda(alvo)}? Os itens dele serão perdidos.`
-      );
-      if (!confirmou) return;
-    }
+  function retirarComanda(id: string) {
     const restante = comandas.filter((c) => c.id !== id);
     if (restante.length === 0) {
       const nova = novaComanda("Pedido 1", pagamentos[0] ?? "Dinheiro");
@@ -251,40 +313,139 @@ export default function Balcao({ aoPedidoCriado }: Props) {
     if (ativaId === id) setAtivaId(restante[0].id);
   }
 
+  function descartarPedido(id: string) {
+    const alvo = comandas.find((c) => c.id === id);
+    if (alvo && alvo.carrinho.length > 0) {
+      const confirmou = window.confirm(
+        `Descartar o ${rotuloComanda(alvo)}? Os itens dele serão perdidos.`
+      );
+      if (!confirmou) return;
+    }
+    retirarComanda(id);
+  }
+
   // ============================================================
   // CARREGAR CARDÁPIO, MOTOBOYS E CONFIGURAÇÕES DA EMPRESA
   // ============================================================
   useEffect(() => {
-    if (!supabase) return;
     const sessao = getSessao();
-    if (!sessao) return; // sem loja logada, não carrega nada
-    supabase
-      .from("products")
-      .select("*")
-      .eq("loja_id", sessao.id)
-      .order("code")
-      .then(({ data }) => {
-        const lista = (data || []) as Product[];
+    if (!sessao) return;
+    const lojaId = sessao.id;
+    let ativo = true;
+
+    async function carregarDadosPDV() {
+      try {
+        const [produtosSalvos, motoboysSalvos, mesasSalvas] = await Promise.all([
+          lerCacheOffline<Product[]>(lojaId, "products"),
+          lerCacheOffline<Motoboy[]>(lojaId, "motoboys"),
+          lerCacheOffline<Mesa[]>(lojaId, "mesas"),
+        ]);
+        if (!ativo) return;
+        if (produtosSalvos) setProdutos(produtosSalvos);
+        if (motoboysSalvos) setMotoboys(motoboysSalvos);
+        if (mesasSalvas) setMesas(mesasSalvas);
+      } catch (error) {
+        console.error("Não foi possível ler o cache offline do PDV:", error);
+        if (!navigator.onLine) {
+          callbackPedidoRef.current("Não foi possível carregar os dados locais do PDV.", "erro");
+        }
+      }
+
+      if (!supabase || !navigator.onLine) return;
+      const [produtosResult, motoboysResult] = await Promise.all([
+        supabase
+          .from("products")
+          .select("*")
+          .eq("loja_id", lojaId)
+          .order("code"),
+        supabase
+          .from("motoboys")
+          .select("*")
+          .eq("loja_id", lojaId),
+      ]);
+      if (!ativo) return;
+
+      if (produtosResult.error) {
+        if (navigator.onLine) {
+          callbackPedidoRef.current("Não foi possível atualizar o cardápio: " + produtosResult.error.message, "erro");
+        }
+      } else {
+        const lista = (produtosResult.data || []) as Product[];
         setProdutos(lista);
         try {
+          await guardarCacheOffline(lojaId, "products", lista);
+        } catch (error) {
+          console.error("Não foi possível atualizar o cache local do cardápio:", error);
+        }
+        try {
           setCategorias(inicializarCategorias(
-            sessao.id,
+            lojaId,
             lista.map((produto) => produto.category)
           ));
         } catch {
-          aoPedidoCriado("Não foi possível carregar as categorias no navegador.", "erro");
+          callbackPedidoRef.current("Não foi possível carregar as categorias no navegador.", "erro");
         }
-      });
-    supabase
-      .from("motoboys")
-      .select("*")
-      .eq("loja_id", sessao.id)
-      .then(({ data }) => setMotoboys((data || []) as Motoboy[]));
+      }
+
+      if (motoboysResult.error) {
+        if (navigator.onLine) {
+          callbackPedidoRef.current("Não foi possível atualizar os motoboys: " + motoboysResult.error.message, "erro");
+        }
+      } else {
+        const lista = (motoboysResult.data || []) as Motoboy[];
+        setMotoboys(lista);
+        try {
+          await guardarCacheOffline(lojaId, "motoboys", lista);
+        } catch (error) {
+          console.error("Não foi possível atualizar o cache local dos motoboys:", error);
+        }
+      }
+    }
+
+    void carregarDadosPDV();
     // Formas de pagamento da loja
-    const listaPagamentos = lerPagamentos(sessao.id);
+    const listaPagamentos = lerPagamentos(lojaId);
     setPagamentos(listaPagamentos);
     // Categorias de produto da loja (lista livre, salva no navegador)
-    setCategorias(lerCategorias(sessao.id));
+    setCategorias(lerCategorias(lojaId));
+    return () => { ativo = false; };
+  }, [supabase]);
+
+  useEffect(() => {
+    const sessao = getSessao();
+    if (!sessao) return;
+    const lojaId = sessao.id;
+    let ativo = true;
+
+    async function atualizarFila() {
+      try {
+        setConectado(navigator.onLine);
+        const quantidade = await contarPedidosOffline(lojaId);
+        if (ativo) setPedidosOffline(quantidade);
+      } catch (error) {
+        console.error("Falha ao atualizar a fila offline:", error);
+        if (ativo) {
+          callbackPedidoRef.current(
+            error instanceof Error ? error.message : "Não foi possível atualizar a fila offline.",
+            "erro"
+          );
+        }
+      }
+    }
+
+    const aoConectar = () => { void atualizarFila(); };
+    const aoDesconectar = () => setConectado(false);
+    const filaAlterada = () => { void atualizarFila(); };
+    window.addEventListener("online", aoConectar);
+    window.addEventListener("offline", aoDesconectar);
+    window.addEventListener("pdv-offline-orders-changed", filaAlterada);
+    void atualizarFila();
+    return () => {
+      ativo = false;
+      window.removeEventListener("online", aoConectar);
+      window.removeEventListener("offline", aoDesconectar);
+      window.removeEventListener("pdv-offline-orders-changed", filaAlterada);
+    };
   }, [supabase]);
 
   useEffect(() => {
@@ -446,6 +607,121 @@ export default function Balcao({ aoPedidoCriado }: Props) {
   const carrinho = comanda?.carrinho ?? [];
   const total = carrinho.reduce((soma, i) => soma + Number(i.product.price) * i.qty, 0);
 
+  async function guardarComandaOffline(dados: DadosPedidoOffline): Promise<Order> {
+    if (!comanda) throw new Error("Nenhuma comanda ativa para salvar offline.");
+    const sessao = getSessao();
+    if (!sessao) throw new Error("Sessão da loja não encontrada.");
+
+    const id = crypto.randomUUID();
+    const criadoEm = new Date().toISOString();
+    const itens = comanda.carrinho.map((item) => ({
+      id: crypto.randomUUID(),
+      order_id: id,
+      product_id: item.product.id,
+      qty: item.qty,
+      price: Number(item.product.price),
+      cost: Number(item.product.cost ?? 0),
+      observacao: item.observacao || null,
+      loja_id: sessao.id,
+    }));
+    const pedido: Order = {
+      id,
+      total: dados.total,
+      type: dados.type,
+      status: "pendente",
+      customer_name: dados.customer_name,
+      address: dados.address,
+      complemento: dados.complemento ?? null,
+      telefone: dados.telefone ?? null,
+      delivery_fee: dados.delivery_fee,
+      mesa_numero: dados.mesa_numero ?? null,
+      forma_pagamento: comanda.formaPagamento,
+      numero_pedido: null,
+      created_at: criadoEm,
+      items: comanda.carrinho.map((item) => ({
+        product_id: item.product.id,
+        name: item.product.name,
+        qty: item.qty,
+        price: Number(item.product.price),
+        observacao: item.observacao || null,
+      })),
+    };
+    const record: OfflineOrderRecord = {
+      id,
+      lojaId: sessao.id,
+      pedido,
+      itens,
+      criadoEm,
+    };
+
+    if (dados.type === "delivery") {
+      record.entrega = {
+        id: crypto.randomUUID(),
+        order_id: id,
+        motoboy_id: dados.motoboyId || null,
+        status: "pendente",
+        taxa: dados.delivery_fee,
+        loja_id: sessao.id,
+      };
+      record.cliente = {
+        nome: comanda.cliente.trim(),
+        telefone: normalizarTelefone(comanda.telefone),
+        endereco: comanda.endereco.trim(),
+        complemento: comanda.complemento.trim() || null,
+        loja_id: sessao.id,
+      };
+    }
+
+    if (pagamentoEhFiado(comanda.formaPagamento)) {
+      const descricaoItens = comanda.carrinho
+        .map((item) => `${item.qty}x ${item.product.name}`)
+        .join(", ");
+      record.fiado = {
+        id: crypto.randomUUID(),
+        cliente_nome: comanda.cliente.trim(),
+        cliente_telefone: normalizarTelefone(comanda.telefone) || null,
+        tipo: "divida",
+        valor: dados.total,
+        descricao: `${rotuloPedido(pedido)}: ${descricaoItens}`,
+        data: hojeISO(),
+        loja_id: sessao.id,
+      };
+    }
+
+    if (dados.mesa_numero) record.mesaNumero = dados.mesa_numero;
+    await guardarPedidoOffline(record);
+    setPedidosOffline(await contarPedidosOffline(sessao.id));
+    return pedido;
+  }
+
+  async function salvarOfflineSeDesconectado(
+    dados: DadosPedidoOffline,
+    mostrarErro: (mensagem: string) => void
+  ): Promise<boolean> {
+    if (navigator.onLine) return false;
+    if (!comanda) {
+      const mensagem = "Nenhuma comanda ativa para salvar offline.";
+      mostrarErro(mensagem);
+      aoPedidoCriado(mensagem, "erro");
+      return true;
+    }
+    const comandaAtual = comanda;
+    setEnviando(true);
+    try {
+      const pedido = await guardarComandaOffline(dados);
+      retirarComanda(comandaAtual.id);
+      aoPedidoCriado(
+        `Pedido offline ${pedido.id.slice(0, 8)} salvo neste dispositivo. Será sincronizado quando a internet voltar.`,
+        "ok"
+      );
+    } catch (error) {
+      const mensagem = error instanceof Error ? error.message : "Não foi possível salvar o pedido offline.";
+      mostrarErro(mensagem);
+      aoPedidoCriado(mensagem, "erro");
+    }
+    return true;
+  }
+
   // ============================================================
   // FINALIZAR PEDIDO NO BALCÃO (nome e telefone são OPCIONAIS)
   // ============================================================
@@ -461,6 +737,15 @@ export default function Balcao({ aoPedidoCriado }: Props) {
     // Nome e telefone opcionais no balcão (obrigatórios só no delivery)
     const nomeCliente = comanda.cliente.trim() || null;
     const telNormalizado = normalizarTelefone(comanda.telefone);
+
+    if (await salvarOfflineSeDesconectado({
+      type: "balcao",
+      total,
+      customer_name: nomeCliente,
+      address: null,
+      telefone: telNormalizado || null,
+      delivery_fee: 0,
+    }, setErroBalcao)) return;
 
     setEnviando(true);
     setErroBalcao(null);
@@ -503,23 +788,13 @@ export default function Balcao({ aoPedidoCriado }: Props) {
     );
     if (erroItens) throw new Error("Não foi possível salvar os itens: " + erroItens.message);
 
-    // 4) Salva o cliente para reconhecer pelo telefone na próxima venda
-    if (nomeCliente && telNormalizado.length >= 10) {
-      await supabase.from("clientes").upsert(
-        {
-          nome: nomeCliente,
-          telefone: telNormalizado,
-          loja_id: sessao.id,
-        },
-        { onConflict: "loja_id,telefone" }
-      );
-    }
+    const avisoFiado = await registrarFiadoDoPedido(pedido as Order, comanda, sessao.id);
 
-    // 5) Fecha a comanda, avisa e vai para a cozinha (KDS)
+    // 4) Fecha a comanda, avisa e vai para a cozinha (KDS)
     setErroBalcao(null);
     const rotulo = comanda.rotulo;
-    removerComanda(comanda.id);
-    await concluirPedido(pedido as Order, `${rotuloPedido(pedido as Order)} de balcão criado! Total: ${formatarMoeda(total)}`);
+    retirarComanda(comanda.id);
+    await concluirPedido(pedido as Order, `${rotuloPedido(pedido as Order)} de balcão criado! Total: ${formatarMoeda(total)}`, avisoFiado);
     void rotulo;
   }
 
@@ -577,6 +852,18 @@ export default function Balcao({ aoPedidoCriado }: Props) {
     }
     const taxaNum = zonaAtual.taxa;
     const totalComTaxa = total + taxaNum;
+
+    if (await salvarOfflineSeDesconectado({
+      type: "delivery",
+      total: totalComTaxa,
+      customer_name: comanda.cliente.trim(),
+      address: comanda.endereco.trim(),
+      complemento: comanda.complemento.trim() || null,
+      telefone: telNormalizado,
+      delivery_fee: taxaNum,
+      motoboyId: comanda.motoboyId,
+    }, setErroForm)) return;
+
     setEnviando(true);
     setErroForm(null);
 
@@ -642,11 +929,13 @@ export default function Balcao({ aoPedidoCriado }: Props) {
 
     if (erroEntrega) throw new Error("Não foi possível criar a entrega: " + erroEntrega.message);
 
+    const avisoFiado = await registrarFiadoDoPedido(pedido as Order, comanda, sessao.id);
+
     // 6) Fecha a comanda
     const motoboy = motoboys.find((m) => m.id === comanda.motoboyId);
     setAvisoCliente(null);
-    removerComanda(comanda.id);
-    await concluirPedido(pedido as Order, `${rotuloPedido(pedido as Order)} de delivery criado! Motoboy: ${motoboy?.nome ?? "—"}`);
+    retirarComanda(comanda.id);
+    await concluirPedido(pedido as Order, `${rotuloPedido(pedido as Order)} de delivery criado! Motoboy: ${motoboy?.nome ?? "—"}`, avisoFiado);
   }
 
   // ============================================================
@@ -748,22 +1037,32 @@ export default function Balcao({ aoPedidoCriado }: Props) {
   // ============================================================
   // PEDIDO NA MESA: carregar mesas livres/ocupadas da loja
   // ============================================================
-  function carregarMesas() {
+  async function carregarMesas() {
     setLiberando(null);
     setErroMesa(null);
-    if (!supabase) return;
     const sessao = getSessao();
     if (!sessao) return;
     setCarregandoMesas(true);
-    supabase
-      .from("mesas")
-      .select("*")
-      .eq("loja_id", sessao.id)
-      .order("numero")
-      .then(({ data }) => {
-        setMesas((data || []) as Mesa[]);
-        setCarregandoMesas(false);
-      });
+    try {
+      const salvas = await lerCacheOffline<Mesa[]>(sessao.id, "mesas");
+      if (salvas) setMesas(salvas);
+      if (!supabase || !navigator.onLine) return;
+
+      const { data, error } = await supabase
+        .from("mesas")
+        .select("*")
+        .eq("loja_id", sessao.id)
+        .order("numero");
+      if (error) throw new Error(error.message);
+      const lista = (data || []) as Mesa[];
+      setMesas(lista);
+      await guardarCacheOffline(sessao.id, "mesas", lista);
+    } catch (error) {
+      const mensagem = error instanceof Error ? error.message : "Não foi possível carregar as mesas.";
+      setErroMesa(`Não foi possível atualizar as mesas: ${mensagem}`);
+    } finally {
+      setCarregandoMesas(false);
+    }
   }
 
   // ============================================================
@@ -783,7 +1082,7 @@ export default function Balcao({ aoPedidoCriado }: Props) {
       return;
     }
     setLiberando(null);
-    if (supabase && mesa.id) {
+    if (supabase && navigator.onLine && mesa.id) {
       const { error } = await supabase
         .from("mesas")
         .update({ status: "disponivel" })
@@ -792,13 +1091,17 @@ export default function Balcao({ aoPedidoCriado }: Props) {
         setErroMesa("Erro ao liberar a mesa: " + error.message);
         return;
       }
-      carregarMesas();
+      void carregarMesas();
     } else {
-      setMesas((atual) =>
-        atual.map((m) =>
-          m.numero === mesa.numero ? { ...m, status: "disponivel" } : m
-        )
+      const atualizadas: Mesa[] = mesas.map((m) =>
+        m.numero === mesa.numero ? { ...m, status: "disponivel" } : m
       );
+      setMesas(atualizadas);
+      try {
+        await guardarCacheOffline(sessao.id, "mesas", atualizadas);
+      } catch (error) {
+        setErroMesa(error instanceof Error ? error.message : "Não foi possível salvar as mesas no dispositivo.");
+      }
     }
   }
 
@@ -814,6 +1117,17 @@ export default function Balcao({ aoPedidoCriado }: Props) {
       setErroMesa(MENSAGEM_CAIXA_FECHADO);
       return;
     }
+
+    if (await salvarOfflineSeDesconectado({
+      type: "mesa",
+      total,
+      customer_name: comanda.cliente.trim() || null,
+      address: null,
+      telefone: normalizarTelefone(comanda.telefone) || null,
+      delivery_fee: 0,
+      mesa_numero: comanda.mesaEscolhida,
+    }, setErroMesa)) return;
+
     setEnviando(true);
     setErroMesa(null);
 
@@ -872,10 +1186,12 @@ export default function Balcao({ aoPedidoCriado }: Props) {
       .eq("numero", comanda.mesaEscolhida);
     if (erroOcuparMesa) throw new Error("Não foi possível ocupar a mesa: " + erroOcuparMesa.message);
 
+    const avisoFiado = await registrarFiadoDoPedido(pedido as Order, comanda, sessao.id);
+
     // 5) Fecha a comanda
     const numeroMesa = comanda.mesaEscolhida;
-    removerComanda(comanda.id);
-    await concluirPedido(pedido as Order, `${rotuloPedido(pedido as Order)} da mesa ${numeroMesa} criado! Total: ${formatarMoeda(total)}`);
+    retirarComanda(comanda.id);
+    await concluirPedido(pedido as Order, `${rotuloPedido(pedido as Order)} da mesa ${numeroMesa} criado! Total: ${formatarMoeda(total)}`, avisoFiado);
   }
 
   // ============================================================
@@ -943,6 +1259,19 @@ export default function Balcao({ aoPedidoCriado }: Props) {
     <fieldset disabled={enviando} aria-label="Pedido no balcão" className="flex flex-1 min-h-0 min-w-0">
       {/* ================= LADO ESQUERDO: cardápio ================= */}
       <div className="flex-1 p-4 flex flex-col gap-3 min-w-0">
+        <div
+          role="status"
+          className={`rounded-lg px-3 py-2 text-xs font-semibold ${
+            conectado ? "bg-green-50 text-green-800" : "bg-amber-50 text-amber-900"
+          }`}
+        >
+          {conectado
+            ? "Conectado ao servidor."
+            : "Sem internet. Os novos pedidos serão salvos neste dispositivo."}
+          {pedidosOffline > 0 &&
+            ` ${pedidosOffline} pedido(s) aguardando sincronização.`}
+        </div>
+
         {/* Abas de comandas (vários pedidos ao mesmo tempo) */}
         <div className="flex items-center gap-2 flex-wrap">
           {comandas.map((c) => {
@@ -975,7 +1304,7 @@ export default function Balcao({ aoPedidoCriado }: Props) {
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    removerComanda(c.id);
+                    descartarPedido(c.id);
                   }}
                   title={`Fechar ${rotuloComanda(c)}`}
                   className={`w-5 h-5 rounded-full text-xs font-bold leading-none ${

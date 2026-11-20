@@ -3,6 +3,8 @@ node_modules/
 
 # Build do Next.js
 .next/
+.next-desktop/
+dist/
 out/
 
 # Node portátil (pode apagar depois de instalar o Node oficial)

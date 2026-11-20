@@ -1,12 +1,12 @@
 "use client";
 
 // ============================================================
-// PÁGINA PRINCIPAL DO PDV (layout PdvDaGalera)
+// PÁGINA PRINCIPAL DO PDV (layout Ponto De Vendas Harley Systems)
 // A seção ativa vem da URL (?aba=...) e a navegação fica
 // toda na sidebar azul do LayoutMenu. Guarda o carrinho,
 // o cliente e as mensagens (toast) de toda a aplicação.
 // ============================================================
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import LayoutMenu, { ItemAtivo } from "@/components/LayoutMenu";
 import Balcao from "@/components/Balcao";
@@ -19,6 +19,8 @@ import Kds from "@/components/Kds";
 import PedidosFinalizados from "@/components/PedidosFinalizados";
 import TelaCaixa from "@/components/Caixa";
 import Relatorios from "@/components/Relatorios";
+import { getSessao, getSupabase } from "@/lib/supabase";
+import { sincronizarPedidosOffline } from "@/lib/offline-pdv";
 
 // Seções válidas (o padrão é o Balcão)
 const ABAS_VALIDAS: ItemAtivo[] = [
@@ -62,6 +64,59 @@ function ConteudoPDV() {
     // Some sozinho depois de 5 segundos
     setTimeout(() => setAviso(null), 5000);
   }
+
+  const callbackPedidoRef = useRef(aoPedidoCriado);
+  useEffect(() => {
+    callbackPedidoRef.current = aoPedidoCriado;
+  }, [aoPedidoCriado]);
+
+  useEffect(() => {
+    const supabase = getSupabase();
+    const sessao = getSessao();
+    if (!supabase || !sessao) return;
+    const clienteSupabase = supabase;
+    const lojaId = sessao.id;
+    let ativo = true;
+    let sincronizando = false;
+
+    async function sincronizar() {
+      if (!navigator.onLine || sincronizando) return;
+      sincronizando = true;
+      try {
+        const resultado = await sincronizarPedidosOffline(clienteSupabase, lojaId);
+        if (!ativo) return;
+        if (resultado.sincronizados.length > 0) {
+          setRefreshKey((atual) => atual + 1);
+          callbackPedidoRef.current(
+            `${resultado.sincronizados.length} pedido(s) offline sincronizado(s) com o servidor.`,
+            "ok"
+          );
+        }
+        if (resultado.falhas.length > 0) {
+          callbackPedidoRef.current(
+            `${resultado.falhas.length} pedido(s) continuam pendentes: ${resultado.falhas[0].mensagem}`,
+            "erro"
+          );
+        }
+      } catch (error) {
+        if (ativo) {
+          callbackPedidoRef.current(
+            error instanceof Error ? error.message : "Não foi possível sincronizar os pedidos offline.",
+            "erro"
+          );
+        }
+      } finally {
+        sincronizando = false;
+      }
+    }
+
+    window.addEventListener("online", sincronizar);
+    void sincronizar();
+    return () => {
+      ativo = false;
+      window.removeEventListener("online", sincronizar);
+    };
+  }, []);
 
   // Atalhos de teclado: F11 = tela cheia | F12 = fechar caixa
   useEffect(() => {

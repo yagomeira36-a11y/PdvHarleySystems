@@ -22,6 +22,14 @@ Inclui frente de caixa (balcão), delivery com motoboys e gestão de entregadore
    - `NEXT_PUBLIC_SUPABASE_URL`
    - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
 
+## Cobrança com Asaas
+
+Configure no servidor (incluindo as variáveis de ambiente da Vercel):
+
+- `ASAAS_API_KEY`
+- `ASAAS_API_URL=https://api.asaas.com/v3` (opcional; este é o padrão)
+- `ASAAS_WEBHOOK_TOKEN` (opcional)
+
 ## Atendente IA pelo WhatsApp
 
 1. Execute [`supabase/atendente-ia-whatsapp.sql`](supabase/atendente-ia-whatsapp.sql) no SQL Editor do Supabase. A migração cria configurações e conversas isoladas por loja, além da coluna `orders.origem`.
@@ -44,6 +52,25 @@ Abra http://localhost:3000 (será redirecionado para /pdv).
 > O projeto inclui um Node portátil em `.nodejs/` (ignorado no git) e o atalho
 > `iniciar.bat`, que sobe o servidor com dois cliques. Depois de instalar o Node
 > oficialmente, a pasta `.nodejs` pode ser apagada.
+
+## Aplicativo desktop para Windows
+
+1. Configure `NEXT_PUBLIC_SUPABASE_URL` e `NEXT_PUBLIC_SUPABASE_ANON_KEY` no ambiente usado para compilar.
+2. Instale as ferramentas desktop: `npm.cmd install --prefix electron`.
+3. Execute `npm.cmd run desktop:build`. O instalador NSIS será criado em `dist/`.
+4. O aplicativo abre o servidor Next.js empacotado em uma janela maximizada, com barra de título e controles padrão. F11 alterna a tela cheia e Esc sai dela. Links externos (incluindo o cardápio online e `wa.me`) abrem no navegador padrão do Windows. A saída `.next-desktop` é separada da saída normal `.next`, sem alterar a configuração padrão da Vercel.
+
+O PDV salva localmente o cardápio, motoboys, mesas e pedidos pendentes no IndexedDB. A primeira utilização deve ser feita com internet para entrar na loja e carregar esses dados. Depois, pedidos criados sem conexão ficam pendentes neste dispositivo e são enviados ao Supabase quando a conexão volta. A fila também registra itens, entregas, clientes, fiado e ocupação de mesa para que uma repetição da sincronização não crie outro pedido.
+
+O Asaas neste sistema é usado para mensalidades da plataforma; pedidos de venda não são cobranças Asaas. A sincronização offline não cria cobranças financeiras nem inclui a chave privada Asaas no instalador. O QZ Tray continua usando a integração existente. Para impressão assinada no desktop, configure `QZ_CERTIFICATE_PATH`, `QZ_PRIVATE_KEY_PATH` e `QZ_ALLOWED_PRINTERS` no ambiente do servidor local; as chaves privadas não são empacotadas no aplicativo.
+
+## Aplicativo Android com Capacitor
+
+1. Publique primeiro a versão Next atual no Vercel. O APK abre `CAPACITOR_SERVER_URL` (padrão: `https://pdv-hamburgueria.vercel.app`). No momento, esse domínio não serve as rotas Next `/login` e `/pdv` (ambas retornam 404); publique a versão atual nesse domínio ou informe o domínio correto antes de gerar o APK final, por exemplo: `$env:CAPACITOR_SERVER_URL="https://seu-dominio"; npm.cmd run android:apk`.
+2. Sincronize o projeto nativo com `npm.cmd run android:sync`.
+3. Com JDK 21 e Android SDK instalados e configurados (`ANDROID_HOME` ou `ANDROID_SDK_ROOT`), execute `npm.cmd run android:apk`. O APK de depuração sai em `android/app/build/outputs/apk/debug/app-debug.apk`.
+
+O Capacitor carrega o PDV hospedado, preservando as rotas/API Next e o uso atual do IndexedDB/Supabase. No Android, as barras do sistema ficam ocultas em modo imersivo e reaparecem temporariamente com gesto; o service worker armazena a página e os recursos estáticos já acessados para permitir reabrir o PDV sem conexão. Os pedidos ficam pendentes no IndexedDB e sincronizam quando a conexão retorna. O primeiro login e carregamento de dados precisam ser feitos online. O botão Voltar navega no histórico e, na tela inicial, minimiza o app. Links externos e o cardápio online abrem fora do app.
 
 ## Fluxo de venda
 

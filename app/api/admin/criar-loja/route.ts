@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 // CRIAR LOJA (chamada pelo painel /admin)
 // 1. cria a loja no banco (função criar_loja)
 // 2. cria o cliente no Asaas
-// 3. cria a assinatura de R$ 79,99/mês
+// 3. cria a assinatura de R$ 49,99/mês
 // 4. guarda os ids do Asaas na loja
 // A chave do Asaas fica só aqui no servidor.
 // ============================================================
@@ -74,7 +74,7 @@ export async function POST(req: Request) {
     );
   }
 
-  // ---- Asaas: cliente + assinatura de R$ 79,99/mês ----
+  // ---- Asaas: cliente + assinatura de R$ 49,99/mês ----
   // Se o Asaas falhar, a loja continua existindo: devolvemos um
   // aviso para o admin saber que a cobrança não foi criada.
   let aviso: string | null = null;

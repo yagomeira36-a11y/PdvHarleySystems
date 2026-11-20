@@ -203,7 +203,7 @@ export function montarEscPos(
       escrever("TESTE DE IMPRESSÃO - SEM VENDA", true, true);
       escrever("NÃO UTILIZAR PARA COBRANÇA", true, true);
     }
-    escrever(limparTexto(empresa.nome_empresa).trim() || "PdvDG", true, true);
+    escrever(limparTexto(empresa.nome_empresa).trim() || "Ponto De Vendas Harley Systems", true, true);
     if (empresa.cnpj) escrever("CNPJ: " + limparTexto(empresa.cnpj), false, true);
     if (empresa.endereco) escrever(empresa.endereco, false, true);
     if (empresa.telefone) escrever("Tel.: " + limparTexto(empresa.telefone), false, true);
@@ -334,7 +334,7 @@ export function montarExtratoEscPos(dados: DadosExtrato, config: ConfigImpressor
   const vendas = numeroValido(dados.vendas, "Vendas");
 
   adicionar([ESC, 0x40, ESC, 0x4d, 0, ESC, 0x74, config.paginaCodigo, ESC, 0x45, 0, ESC, 0x61, 0]);
-  escrever(limparTexto(empresa.nome_empresa).trim() || "PdvDG", true, true);
+  escrever(limparTexto(empresa.nome_empresa).trim() || "Ponto De Vendas Harley Systems", true, true);
   if (empresa.cnpj) escrever("CNPJ: " + limparTexto(empresa.cnpj), false, true);
   if (empresa.endereco) escrever(empresa.endereco, false, true);
   if (empresa.telefone) escrever("Tel.: " + limparTexto(empresa.telefone), false, true);

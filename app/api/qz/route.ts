@@ -188,7 +188,7 @@ const SAFE_OPTIONS: Readonly<JsonObject> = {
 function validateOptions(options: unknown): void {
   requireValid(isObject(options));
   requireValid(options.copies === 1 && options.encoding === "ISO-8859-1");
-  requireValid(shortText(options.jobName, 128) && options.jobName.startsWith("PDVDG ") && options.jobName.trim().length > 6);
+  requireValid(shortText(options.jobName, 128) && /^(?:Harley Systems|PDVDG) /.test(options.jobName) && options.jobName.trim().length > 6);
   for (const [key, value] of Object.entries(options)) {
     if (key === "jobName") continue;
     requireValid(Object.prototype.hasOwnProperty.call(SAFE_OPTIONS, key) && value === SAFE_OPTIONS[key]);

@@ -16,6 +16,7 @@ import {
   getSessao,
   formatarMoeda,
   rotuloPedido,
+  linkWhatsApp,
   Order,
   OrderItem,
   Product,
@@ -183,6 +184,7 @@ export default function PedidosFinalizados({
           status: "cancelado",
           motivo_cancelamento: motivo,
           cancelado_em: new Date().toISOString(),
+          cancelado_por: sessao.email_dono,
         })
         .eq("id", p.id)
         .eq("loja_id", sessao.id);
@@ -285,6 +287,7 @@ export default function PedidosFinalizados({
               <tr>
                 <th className="px-4 py-2">Pedido</th>
                 <th className="px-4 py-2">Tipo</th>
+                <th className="px-4 py-2">Cliente</th>
                 <th className="px-4 py-2">Hora</th>
                 <th className="px-4 py-2 text-right">Total</th>
                 <th className="px-4 py-2 text-center">Status</th>
@@ -301,6 +304,32 @@ export default function PedidosFinalizados({
                       : p.type === "mesa"
                         ? `Mesa ${p.mesa_numero ?? ""}`
                         : "Balcão"}
+                  </td>
+                  <td className="px-4 py-2">
+                    <p className="font-medium text-gray-700">{p.customer_name ?? "—"}</p>
+                    {p.type === "delivery" && p.address && (
+                      <p className="text-xs text-gray-500">
+                        {p.address}
+                        {p.complemento ? ` · ${p.complemento}` : ""}
+                      </p>
+                    )}
+                    {p.telefone && (
+                      <div className="mt-0.5 flex items-center gap-2 text-xs text-gray-500">
+                        <span>
+                          Tel: <b className="text-gray-700">{p.telefone}</b>
+                        </span>
+                        {linkWhatsApp(p.telefone) && (
+                          <a
+                            href={linkWhatsApp(p.telefone)!}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="rounded-md bg-green-600 px-2 py-0.5 font-bold text-white hover:bg-green-700"
+                          >
+                            WhatsApp
+                          </a>
+                        )}
+                      </div>
+                    )}
                   </td>
                   <td className="px-4 py-2 text-gray-500">
                     {formatarHora(p.created_at)}

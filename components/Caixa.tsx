@@ -203,6 +203,13 @@ export default function TelaCaixa({ refreshKey }: { refreshKey: number }) {
     const delivery = todos.filter((o) => o.type === "delivery");
     const mesa = todos.filter((o) => o.type === "mesa");
     const taxasHoje = delivery.reduce((s, o) => s + Number(o.delivery_fee), 0);
+    const canceladosExpediente = periodo
+      .filter((o) => o.status === "cancelado")
+      .sort(
+        (a, b) =>
+          new Date(b.cancelado_em || b.created_at).getTime() -
+          new Date(a.cancelado_em || a.created_at).getTime()
+      );
 
     return {
       ...detalhes,
@@ -224,6 +231,7 @@ export default function TelaCaixa({ refreshKey }: { refreshKey: number }) {
         (a, b) =>
           new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
       ),
+      canceladosExpediente,
       reaberto: Boolean(reaberto),
     };
   }, [pedidos, itens, caixas, entregas, motoboys]);
@@ -432,7 +440,7 @@ export default function TelaCaixa({ refreshKey }: { refreshKey: number }) {
     return {
       empresa:
         empresa || {
-          nome_empresa: sessao?.nome_loja ?? "PdvDG",
+          nome_empresa: sessao?.nome_loja ?? "Ponto De Vendas Harley Systems",
           cnpj: null,
           telefone: null,
           endereco: null,
@@ -538,36 +546,131 @@ export default function TelaCaixa({ refreshKey }: { refreshKey: number }) {
         <div className="flex flex-col gap-6">
           {/* ================= CARDS DO CAIXA ================= */}
           <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
-            <div className="bg-white rounded-xl p-4">
-              <p className="text-xs text-gray-400">Vendas do caixa</p>
-              <p className="text-xl font-bold text-green-600">
+            <div className="rounded-2xl border border-emerald-100 bg-gradient-to-br from-white to-emerald-50 p-4 shadow-sm">
+              <p className="text-xs font-bold uppercase tracking-wide text-emerald-700">Vendas do caixa</p>
+              <p className="mt-2 text-2xl font-black text-emerald-700">
                 {formatarMoeda(resumo.caixaHoje)}
               </p>
             </div>
-            <div className="bg-white rounded-xl p-4">
-              <p className="text-xs text-gray-400">Lucro do caixa</p>
-              <p className="text-xl font-bold text-green-600">
+            <div className="rounded-2xl border border-green-100 bg-gradient-to-br from-white to-green-50 p-4 shadow-sm">
+              <p className="text-xs font-bold uppercase tracking-wide text-green-700">Lucro do caixa</p>
+              <p className="mt-2 text-2xl font-black text-green-700">
                 {formatarMoeda(resumo.lucroHoje)}
               </p>
             </div>
-            <div className="bg-white rounded-xl p-4">
-              <p className="text-xs text-gray-400">Margem do caixa</p>
-              <p className="text-xl font-bold">{resumo.margemHoje.toFixed(1)}%</p>
+            <div className="rounded-2xl border border-blue-100 bg-gradient-to-br from-white to-blue-50 p-4 shadow-sm">
+              <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Margem do caixa</p>
+              <p className="mt-2 text-2xl font-black text-blue-700">{resumo.margemHoje.toFixed(1)}%</p>
             </div>
-            <div className="bg-white rounded-xl p-4">
-              <p className="text-xs text-gray-400">Pedidos do caixa</p>
-              <p className="text-xl font-bold">{resumo.pedidosHoje}</p>
+            <div className="rounded-2xl border border-violet-100 bg-gradient-to-br from-white to-violet-50 p-4 shadow-sm">
+              <p className="text-xs font-bold uppercase tracking-wide text-violet-700">Pedidos do caixa</p>
+              <p className="mt-2 text-2xl font-black text-violet-700">{resumo.pedidosHoje}</p>
             </div>
-            <div className="bg-white rounded-xl p-4">
-              <p className="text-xs text-gray-400">Taxas do caixa</p>
-              <p className="text-xl font-bold">{formatarMoeda(resumo.taxasHoje)}</p>
+            <div className="rounded-2xl border border-orange-100 bg-gradient-to-br from-white to-orange-50 p-4 shadow-sm">
+              <p className="text-xs font-bold uppercase tracking-wide text-orange-700">Taxas do caixa</p>
+              <p className="mt-2 text-2xl font-black text-orange-700">{formatarMoeda(resumo.taxasHoje)}</p>
             </div>
-            <div className="bg-white rounded-xl p-4">
-              <p className="text-xs text-gray-400">Total geral (caixa)</p>
-              <p className="text-xl font-bold text-green-600">
-                {formatarMoeda(resumo.caixaGeral)}
+            <div className="rounded-2xl border border-red-100 bg-gradient-to-br from-white to-red-50 p-4 shadow-sm">
+              <p className="text-xs font-bold uppercase tracking-wide text-red-700">Cancelados</p>
+              <p className="mt-2 text-2xl font-black text-red-700">
+                {resumo.cancelados}
               </p>
             </div>
+          </div>
+
+          {/* ================= RESUMO VISUAL DO EXPEDIENTE ================= */}
+          <div className="grid gap-4 xl:grid-cols-[1.45fr_1fr]">
+            <section className="rounded-2xl border border-gray-200 bg-white shadow-sm overflow-hidden" aria-labelledby="resumo-pedidos-titulo">
+              <header className="flex flex-wrap items-end justify-between gap-3 border-b border-gray-100 px-5 py-4">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Movimento do caixa</p>
+                  <h2 id="resumo-pedidos-titulo" className="mt-1 text-lg font-black text-gray-900">Resumo dos pedidos</h2>
+                </div>
+                <span className="rounded-full bg-gray-100 px-3 py-1 text-xs font-bold text-gray-600">
+                  {resumo.expediente.length} pedidos
+                </span>
+              </header>
+
+              {resumo.expediente.length === 0 ? (
+                <div className="px-5 py-10 text-center">
+                  <p className="font-bold text-gray-500">Nenhum pedido realizado neste caixa.</p>
+                  <p className="mt-1 text-xs text-gray-400">Os novos pedidos aparecerão aqui automaticamente.</p>
+                </div>
+              ) : (
+                <div className="divide-y divide-gray-100">
+                  {resumo.expediente.map((pedido) => (
+                    <article key={pedido.id} className="flex items-center gap-3 px-5 py-3.5 transition hover:bg-gray-50">
+                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gray-900 text-sm font-black text-white">
+                        {pedido.numero_pedido ?? "—"}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="font-bold text-gray-900">{rotuloPedido(pedido)}</p>
+                          <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-600">
+                            {pedido.type === "delivery"
+                              ? "Delivery"
+                              : pedido.type === "mesa"
+                                ? `Mesa ${pedido.mesa_numero ?? ""}`.trim()
+                                : "Balcão"}
+                          </span>
+                        </div>
+                        <p className="mt-1 truncate text-sm text-gray-600">
+                          <b>{pedido.customer_name?.trim() || "Cliente não informado"}</b>
+                          <span className="mx-1.5 text-gray-300">·</span>
+                          {formatarHoraCurta(pedido.created_at)}
+                        </p>
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <p className="font-black text-gray-900">{formatarMoeda(Number(pedido.total))}</p>
+                        <p className="mt-0.5 text-[11px] text-gray-500">{pedido.forma_pagamento || "Pagamento não informado"}</p>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <section className="rounded-2xl border border-red-200 bg-red-50/60 shadow-sm overflow-hidden" aria-labelledby="resumo-cancelados-titulo">
+              <header className="flex items-end justify-between gap-3 border-b border-red-100 px-5 py-4">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wider text-red-500">Não faturaram</p>
+                  <h2 id="resumo-cancelados-titulo" className="mt-1 text-lg font-black text-red-800">Pedidos cancelados</h2>
+                </div>
+                <span className="rounded-full bg-red-700 px-3 py-1 text-xs font-bold text-white">
+                  {resumo.canceladosExpediente.length}
+                </span>
+              </header>
+
+              {resumo.canceladosExpediente.length === 0 ? (
+                <div className="px-5 py-10 text-center">
+                  <p className="font-bold text-red-700">Nenhum cancelamento.</p>
+                  <p className="mt-1 text-xs text-red-500">Ótimo! Não houve pedidos cancelados neste caixa.</p>
+                </div>
+              ) : (
+                <div className="max-h-96 divide-y divide-red-100 overflow-y-auto">
+                  {resumo.canceladosExpediente.map((pedido) => (
+                    <article key={pedido.id} className="px-5 py-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="font-black text-red-900">{rotuloPedido(pedido)}</p>
+                          <p className="mt-1 text-sm font-semibold text-gray-800">
+                            Cliente: {pedido.customer_name?.trim() || "Não informado"}
+                          </p>
+                        </div>
+                        <p className="shrink-0 text-sm font-black text-red-700">{formatarMoeda(Number(pedido.total))}</p>
+                      </div>
+                      <p className="mt-2 rounded-lg border border-red-200 bg-white px-3 py-2 text-sm text-red-800">
+                        <b>Motivo:</b> {pedido.motivo_cancelamento || "Não informado"}
+                      </p>
+                      <p className="mt-2 text-xs text-gray-500">
+                        Cancelado em {pedido.cancelado_em ? formatarDataHora(pedido.cancelado_em) : formatarDataHora(pedido.created_at)}
+                        {pedido.cancelado_por ? ` por ${pedido.cancelado_por}` : ""}
+                      </p>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </section>
           </div>
 
           {/* Detalhamento do caixa */}

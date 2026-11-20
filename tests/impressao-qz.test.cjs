@@ -40,7 +40,7 @@ assert(!escpos.validarBytesEscPos(Uint8Array.from([27,64,27,112,0,10,10,10,10,10
 assert(!escpos.validarBytesEscPos(new Uint8Array(1024 * 1024 + 1)));
 for (const paginaCodigo of [2, 3, 19]) assert(escpos.validarBytesEscPos(escpos.montarEscPos(dados, { ...config, paginaCodigo, colunas: 42 }, 'comprovante')));
 const semModelo = escpos.montarEscPos({ ...dados, empresa: { nome_empresa: '  ', cnpj: null, telefone: null, endereco: null } }, { ...config, rodape: '' }, 'comprovante');
-for (const texto of ['PdvDG', 'COMPROVANTE', '2x ', 'TOTAL', '35,00']) assert(Buffer.from(semModelo).includes(Buffer.from(texto)));
+for (const texto of ['Ponto De Vendas Harley Systems', 'COMPROVANTE', '2x ', 'TOTAL', '35,00']) assert(Buffer.from(semModelo).includes(Buffer.from(texto)));
 assert(semModelo.length > 0);
 for (const alteracao of [
   b => { b[b.length - 5] = 255; },
@@ -148,7 +148,7 @@ async function testesAssinatura() {
   }, { process: { env }, Buffer, URL, TextDecoder });
   const { NextRequest } = require('next/server');
   const request = (payload, headers = {}) => new NextRequest('http://localhost:3001/api/qz', { method: 'POST', headers: { host: 'localhost:3001', origin: 'http://localhost:3001', 'sec-fetch-site': 'same-origin', 'x-pdv-qz': '1', 'content-type': 'application/json', cookie: 'loja_sessao=' + encodeURIComponent(JSON.stringify({ id: 'e4976b39-6302-43e1-95bb-47f9a0b83d91', status_pagamento: 'ativo' })), ...headers }, body: JSON.stringify({ request: JSON.stringify(payload) }) });
-  const valid = { call: 'print', timestamp: Date.now(), params: { printer: { name: 'Térmica 80' }, options: { copies: 1, encoding: 'ISO-8859-1', jobName: 'PDVDG TESTE' }, data: [cliente, cozinha].map(bytes => ({ type: 'raw', format: 'command', flavor: 'base64', data: Buffer.from(bytes).toString('base64') })) } };
+  const valid = { call: 'print', timestamp: Date.now(), params: { printer: { name: 'Térmica 80' }, options: { copies: 1, encoding: 'ISO-8859-1', jobName: 'Harley Systems TESTE' }, data: [cliente, cozinha].map(bytes => ({ type: 'raw', format: 'command', flavor: 'base64', data: Buffer.from(bytes).toString('base64') })) } };
   const res = await route.POST(request(valid));
   assert.equal(res.status, 200, JSON.stringify(await res.clone().json()));
   const result = await res.json();

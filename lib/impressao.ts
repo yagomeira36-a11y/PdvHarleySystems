@@ -80,7 +80,7 @@ export function montarConteudoComanda(
       add(`TOTAL: ${money(Number(pedido.total))}`, { negrito: true });
       break;
     case "modelo2":
-      add(empresa.nome_empresa || "PdvDG", { negrito: true, centralizado: true });
+      add(empresa.nome_empresa || "Ponto De Vendas Harley Systems", { negrito: true, centralizado: true });
       add(numero, { negrito: true });
       if (pedido.customer_name) add(`Cliente: ${pedido.customer_name}`);
       if (endereco) add(`Endereço: ${endereco}`);

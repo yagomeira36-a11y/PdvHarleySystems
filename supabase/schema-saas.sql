@@ -1,5 +1,5 @@
 -- ============================================================
--- SISTEMA SAAS PdvDaGalera — LOGIN DE LOJAS + PAINEL SUPER ADMIN
+-- SISTEMA SAAS Ponto De Vendas Harley Systems — LOGIN DE LOJAS + PAINEL SUPER ADMIN
 -- (Supabase / PostgreSQL)
 -- ============================================================
 -- COMO USAR:
@@ -54,7 +54,7 @@ ALTER TABLE lojas ADD COLUMN IF NOT EXISTS data_vencimento DATE;
 ALTER TABLE lojas ADD COLUMN IF NOT EXISTS plano TEXT NOT NULL DEFAULT 'basico';
 ALTER TABLE lojas ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now();
 
--- Integração com o Asaas (cobrança da mensalidade de R$ 79,99/mês)
+-- Integração com o Asaas (cobrança da mensalidade de R$ 49,99/mês)
 ALTER TABLE lojas ADD COLUMN IF NOT EXISTS asaas_customer_id TEXT;
 ALTER TABLE lojas ADD COLUMN IF NOT EXISTS asaas_subscription_id TEXT;
 

@@ -4,7 +4,7 @@
 // TELA CONFIGURAÇÕES (hub)
 // Primeiro aparece uma "janelinha" com ícone para cada item:
 // Empresa, Impressora do PDV, Entrega por KM, Custos, Formas de
-// Pagamento, Motoboys, Bot Assistente e Layout.
+// Pagamento, Motoboys e Layout.
 // Clicando no ícone, a seção abre dentro das Configurações.
 // ============================================================
 import { useEffect, useState } from "react";
@@ -20,7 +20,6 @@ import { lerPagamentos, salvarPagamentos } from "@/lib/pagamentos";
 import DeliveryZonesMap from "./DeliveryZonesMap";
 import ConfigImpressora from "./ConfigImpressora";
 import Motoboys from "./Motoboys";
-import BotAssistente from "./BotAssistente";
 import LayoutConfig from "./LayoutConfig";
 
 // Formulário da empresa
@@ -40,7 +39,6 @@ type Secao =
   | "custos"
   | "pagamentos"
   | "motoboys"
-  | "bot"
   | "layout";
 
 // ============================================================
@@ -101,16 +99,6 @@ function IconeMotoboy() {
     </svg>
   );
 }
-function IconeBot() {
-  return (
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="4" y="7" width="16" height="13" rx="3" />
-      <path d="M12 7V3M10 3h4M2 11v5M22 11v5M9 16h6" />
-      <circle cx="9" cy="12" r="1" />
-      <circle cx="15" cy="12" r="1" />
-    </svg>
-  );
-}
 function IconeLayout() {
   return (
     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -167,12 +155,6 @@ const CARTOES: {
     titulo: "Motoboys",
     descricao: "Cadastro de motoboys e controle das entregas.",
     icone: <IconeMotoboy />,
-  },
-  {
-    id: "bot",
-    titulo: "Bot Assistente",
-    descricao: "Assistente interno de estoque por conversa.",
-    icone: <IconeBot />,
   },
   {
     id: "layout",
@@ -403,9 +385,9 @@ export default function Configuracoes({
 
   // ============================================================
   // SEÇÕES QUE SÃO TELAS INTEIRAS (têm rolagem própria):
-  // Motoboys, Bot Assistente e Layout
+  // Motoboys e Layout
   // ============================================================
-  if (secao === "motoboys" || secao === "bot" || secao === "layout") {
+  if (secao === "motoboys" || secao === "layout") {
     return (
       <div className="flex-1 flex flex-col overflow-hidden">
         <div className="shrink-0 bg-white border-b border-gray-200 px-4 py-3 flex items-center gap-3">
@@ -414,7 +396,6 @@ export default function Configuracoes({
         </div>
         <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
           {secao === "motoboys" && <Motoboys refreshKey={refreshKey} />}
-          {secao === "bot" && <BotAssistente />}
           {secao === "layout" && <LayoutConfig aoPedidoCriado={aoPedidoCriado} />}
         </div>
       </div>

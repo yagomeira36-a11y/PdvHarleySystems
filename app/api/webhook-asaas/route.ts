@@ -13,8 +13,6 @@ export const dynamic = "force-dynamic";
 // - estorno/cancelamento -> loja fica BLOQUEADO
 // Configure a URL no painel do Asaas:
 //   https://SEU-DOMINIO/api/webhook-asaas
-// (no sandbox, use um túnel tipo ngrok para o Asaas alcançar
-//  a sua máquina — ou use o botão "Já paguei" da tela /pagamento)
 // ============================================================
 
 // Eventos que liberam o acesso
@@ -45,7 +43,8 @@ type CorpoWebhook = {
 };
 
 export async function POST(req: Request) {
-  // Se ASAAS_WEBHOOK_TOKEN estiver no .env.local, o Asaas precisa
+  // Se ASAAS_WEBHOOK_TOKEN estiver nas variáveis de ambiente do servidor,
+  // o Asaas precisa
   // mandar o mesmo valor no cabeçalho asaas-access-token
   const tokenEsperado = process.env.ASAAS_WEBHOOK_TOKEN;
   if (tokenEsperado && req.headers.get("asaas-access-token") !== tokenEsperado) {
@@ -65,36 +64,40 @@ export async function POST(req: Request) {
   }
 
   const customerId = corpo?.payment?.customer ?? corpo?.subscription?.customer ?? null;
-  const subscriptionId =
+  let subscriptionId =
     corpo?.payment?.subscription ?? corpo?.subscription?.id ?? null;
-  const lojaIdRef =
-    corpo?.payment?.externalReference ?? corpo?.subscription?.externalReference ?? null;
+  const lojaIdRef = (
+    corpo?.payment?.externalReference ?? corpo?.subscription?.externalReference ?? null
+  )?.replace(/^pdvdg-mensalidade-/, "") ?? null;
 
   let lojaId: string | null = null;
 
   if (customerId) {
     const { data } = await supabase
       .from("lojas")
-      .select("id")
+      .select("id,asaas_subscription_id")
       .eq("asaas_customer_id", customerId)
       .maybeSingle();
     lojaId = (data?.id as string | undefined) ?? null;
+    if (lojaId) subscriptionId ??= (data?.asaas_subscription_id as string | undefined) ?? null;
   }
   if (!lojaId && subscriptionId) {
     const { data } = await supabase
       .from("lojas")
-      .select("id")
+      .select("id,asaas_subscription_id")
       .eq("asaas_subscription_id", subscriptionId)
       .maybeSingle();
     lojaId = (data?.id as string | undefined) ?? null;
+    if (lojaId) subscriptionId ??= (data?.asaas_subscription_id as string | undefined) ?? null;
   }
   if (!lojaId && lojaIdRef) {
     const { data } = await supabase
       .from("lojas")
-      .select("id")
+      .select("id,asaas_subscription_id")
       .eq("id", lojaIdRef)
       .maybeSingle();
     lojaId = (data?.id as string | undefined) ?? null;
+    if (lojaId) subscriptionId ??= (data?.asaas_subscription_id as string | undefined) ?? null;
   }
 
   if (!lojaId) {

@@ -562,7 +562,7 @@ export default function LayoutConfig({
               </div>
             )}
             <p className="text-[10px] opacity-70 mb-3">
-              Ponto de Venda Da Galera
+              Ponto De Vendas Harley Systems
             </p>
             <div className="bg-gradient-to-b from-gray-400 to-gray-600 rounded-xl p-2.5 flex items-center gap-2 mb-3 shadow-[0_3px_8px_rgba(0,0,0,0.3),inset_0_2px_3px_rgba(255,255,255,0.35)] border border-white/40">
               {logo ? (

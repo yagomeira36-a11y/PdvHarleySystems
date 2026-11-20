@@ -1,9 +1,9 @@
 -- ============================================================
--- PdvDaGalera — esquema completo consolidado (Supabase/PostgreSQL)
+-- Ponto De Vendas Harley Systems — esquema completo consolidado (Supabase/PostgreSQL)
 -- ============================================================
 -- Este arquivo não apaga tabelas nem registros existentes.
 -- Ele consolida o esquema SaaS, pedidos, cardápio online, impressão,
--- fiado e Atendente IA WhatsApp usados atualmente pelo projeto.
+ru-- fiado usados atualmente pelo projeto.
 --
 -- IMPORTANTE SOBRE DADOS:
 -- Os produtos, pedidos, clientes, credenciais e configurações reais
@@ -132,7 +132,8 @@ CREATE TABLE IF NOT EXISTS public.orders (
   observacao TEXT,
   items JSONB NOT NULL DEFAULT '[]'::jsonb,
   motivo_cancelamento TEXT,
-  cancelado_em TIMESTAMPTZ
+  cancelado_em TIMESTAMPTZ,
+  cancelado_por TEXT
 );
 
 ALTER TABLE public.orders
@@ -143,7 +144,8 @@ ALTER TABLE public.orders
   ADD COLUMN IF NOT EXISTS observacao TEXT,
   ADD COLUMN IF NOT EXISTS items JSONB NOT NULL DEFAULT '[]'::jsonb,
   ADD COLUMN IF NOT EXISTS motivo_cancelamento TEXT,
-  ADD COLUMN IF NOT EXISTS cancelado_em TIMESTAMPTZ;
+  ADD COLUMN IF NOT EXISTS cancelado_em TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS cancelado_por TEXT;
 
 ALTER TABLE public.orders
   DROP CONSTRAINT IF EXISTS orders_type_check,
@@ -611,11 +613,6 @@ ALTER TABLE public.configuracoes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.mesas ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.store_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.fiados ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.whatsapp_ai_settings ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.whatsapp_ai_conversations ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.whatsapp_ai_processed_messages ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.whatsapp_ai_outbox ENABLE ROW LEVEL SECURITY;
-
 DROP POLICY IF EXISTS acesso_publico_lojas ON public.lojas;
 CREATE POLICY acesso_publico_lojas ON public.lojas
   FOR ALL USING (true) WITH CHECK (true);
@@ -652,12 +649,6 @@ CREATE POLICY acesso_publico_store_settings ON public.store_settings
 DROP POLICY IF EXISTS acesso_publico_fiados ON public.fiados;
 CREATE POLICY acesso_publico_fiados ON public.fiados
   FOR ALL USING (true) WITH CHECK (true);
-
--- WhatsApp é acessado pelas rotas server-side com service_role.
-REVOKE ALL ON TABLE public.whatsapp_ai_settings FROM anon, authenticated;
-REVOKE ALL ON TABLE public.whatsapp_ai_conversations FROM anon, authenticated;
-REVOKE ALL ON TABLE public.whatsapp_ai_processed_messages FROM anon, authenticated;
-REVOKE ALL ON TABLE public.whatsapp_ai_outbox FROM anon, authenticated;
 
 -- ------------------------------------------------------------
 -- INSERTS DE INICIALIZAÇÃO SEGUROS

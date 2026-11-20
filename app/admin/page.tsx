@@ -2,15 +2,23 @@
 
 // ============================================================
 // PAINEL SUPER ADMIN (/admin) — só o dono do sistema acessa
-// - Login fixo no código (admin@menUau.com / senha abaixo)
+// - Login: admin@menUau.com + senha do código (lib/admin.ts) ou
+//   o login salvo no banco, editável no botão "Login do Painel"
+//   (depois de rodar supabase/admin-super-login.sql)
 // - 3 cards: Total de Lojas, Em Dia, Atrasadas
 // - Lista de lojas com status e botões de ação
 // - "+ Nova Loja" cria a loja e o login dela na hora
+// - "Editar Login" muda o e-mail e a senha do dono da loja
 // ============================================================
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getSupabase, salvarSessao } from "@/lib/supabase";
-import { ADMIN_EMAIL, ADMIN_SENHA } from "@/lib/admin";
+import {
+  ADMIN_EMAIL,
+  validarLoginSuperAdmin,
+  emailSuperAdmin,
+  salvarLoginSuperAdmin,
+} from "@/lib/admin";
 
 type Loja = {
   id: string;
@@ -88,22 +96,37 @@ export default function Admin() {
   const [modalVencimento, setModalVencimento] = useState<Loja | null>(null);
   const [novaData, setNovaData] = useState("");
 
+  // ---- Modal Editar Login da Loja ----
+  const [modalLoginLoja, setModalLoginLoja] = useState<Loja | null>(null);
+  const [formLoginLoja, setFormLoginLoja] = useState({ email: "", senha: "" });
+
+  // ---- Modal Editar Login do Painel (super admin) ----
+  const [modalLoginPainel, setModalLoginPainel] = useState(false);
+  const [formLoginPainel, setFormLoginPainel] = useState({ senhaAtual: "", email: "", novaSenha: "" });
+  const [emailPainel, setEmailPainel] = useState(ADMIN_EMAIL);
+
   // Já está logado como admin nesta aba?
   useEffect(() => {
     if (sessionStorage.getItem("menUAU_admin_ok") === "1") setAutenticado(true);
   }, []);
 
+  // Mostra o e-mail real do painel (banco se o SQL já foi rodado)
+  useEffect(() => {
+    emailSuperAdmin().then(setEmailPainel);
+  }, []);
+
   // ============================================================
-  // LOGIN DO SUPER ADMIN (credenciais fixas no código)
+  // LOGIN DO SUPER ADMIN (banco se o SQL foi rodado; senão, o código)
   // ============================================================
-  function entrarAdmin(e: React.FormEvent) {
+  async function entrarAdmin(e: React.FormEvent) {
     e.preventDefault();
     setErroLogin(null);
-    if (email.trim().toLowerCase() === ADMIN_EMAIL.toLowerCase() && senha === ADMIN_SENHA) {
+    const resultado = await validarLoginSuperAdmin(email, senha);
+    if (resultado.ok) {
       sessionStorage.setItem("menUAU_admin_ok", "1");
       setAutenticado(true);
     } else {
-      setErroLogin("Acesso negado");
+      setErroLogin(resultado.erro ?? "Acesso negado");
     }
   }
 
@@ -154,7 +177,7 @@ export default function Admin() {
   // Chama a rota /api/admin/criar-loja, que no servidor:
   // 1. cria a loja (login + cardápio padrão)
   // 2. cria o cliente no Asaas
-  // 3. cria a assinatura de R$ 79,99/mês
+  // 3. cria a assinatura de R$ 49,99/mês
   // A chave do Asaas fica só no servidor.
   // ============================================================
   async function criarLoja(e: React.FormEvent) {
@@ -304,6 +327,90 @@ export default function Admin() {
   }
 
   // ============================================================
+  // EDITAR LOGIN DA LOJA (e-mail e/ou senha do dono)
+  // ============================================================
+  function abrirLoginLoja(loja: Loja) {
+    setFormLoginLoja({ email: loja.email_dono, senha: "" });
+    setModalLoginLoja(loja);
+    setMensagem(null);
+  }
+
+  async function salvarLoginLoja(e: React.FormEvent) {
+    e.preventDefault();
+    if (!modalLoginLoja || salvando) return;
+    if (!formLoginLoja.email.trim()) {
+      setMensagem({ tipo: "erro", texto: "Informe o e-mail do dono." });
+      return;
+    }
+    setSalvando(true);
+    try {
+      const resposta = await fetch("/api/admin/editar-loja", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: modalLoginLoja.id,
+          email: formLoginLoja.email.trim(),
+          senha: formLoginLoja.senha,
+        }),
+      });
+      const corpo = (await resposta.json()) as { erro?: string; ok?: boolean; senhaAlterada?: boolean };
+      if (!resposta.ok || !corpo.ok) {
+        setMensagem({ tipo: "erro", texto: corpo.erro ?? "Erro ao salvar o login da loja." });
+        return;
+      }
+      setMensagem({
+        tipo: "ok",
+        texto: `Login de "${modalLoginLoja.nome_loja}" atualizado${corpo.senhaAlterada ? " (e-mail e senha)" : " (e-mail)"}! O dono entra com o novo cadastro já a partir de agora.`,
+      });
+      setModalLoginLoja(null);
+      carregarLojas();
+    } catch {
+      setMensagem({ tipo: "erro", texto: "Não foi possível falar com o servidor." });
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  // ============================================================
+  // EDITAR LOGIN DO PAINEL (super admin)
+  // ============================================================
+  async function abrirLoginPainel() {
+    const atual = await emailSuperAdmin();
+    setEmailPainel(atual);
+    setFormLoginPainel({ senhaAtual: "", email: atual, novaSenha: "" });
+    setModalLoginPainel(true);
+    setMensagem(null);
+  }
+
+  async function salvarLoginPainel(e: React.FormEvent) {
+    e.preventDefault();
+    if (salvando) return;
+    if (!formLoginPainel.senhaAtual) {
+      setMensagem({ tipo: "erro", texto: "Informe a senha atual para confirmar a mudança." });
+      return;
+    }
+    setSalvando(true);
+    const resultado = await salvarLoginSuperAdmin({
+      senhaAtual: formLoginPainel.senhaAtual,
+      novoEmail: formLoginPainel.email,
+      novaSenha: formLoginPainel.novaSenha,
+    });
+    setSalvando(false);
+    if (!resultado.ok) {
+      setMensagem({ tipo: "erro", texto: resultado.erro ?? "Erro ao salvar o login do painel." });
+      return;
+    }
+    const novoEmail = formLoginPainel.email.trim().toLowerCase();
+    setEmailPainel(novoEmail);
+    setModalLoginPainel(false);
+    setMensagem({
+      tipo: "ok",
+      texto: `Login do painel salvo! Na próxima entrada use ${novoEmail}` +
+        (formLoginPainel.novaSenha ? " com a nova senha." : "."),
+    });
+  }
+
+  // ============================================================
   // ESTATÍSTICAS
   // ============================================================
   const emDia = lojas.filter((l) => statusDe(l) === "ativo").length;
@@ -326,7 +433,7 @@ export default function Admin() {
             <p className="text-2xl font-extrabold text-gray-900 tracking-wide">
               Super Admin
             </p>
-            <p className="text-sm text-gray-500">PdvDG</p>
+            <p className="text-sm text-gray-500">Ponto De Vendas Harley Systems</p>
           </div>
 
           {erroLogin && (
@@ -344,7 +451,7 @@ export default function Admin() {
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="admin@menUau.com"
+                placeholder={emailPainel}
                 autoFocus
                 className={inputClasse}
               />
@@ -384,7 +491,7 @@ export default function Admin() {
           <h1 className="text-2xl font-extrabold tracking-wide">
             Painel Super Admin
           </h1>
-          <p className="text-xs text-blue-200">PdvDG — gestão de lojas</p>
+          <p className="text-xs text-blue-200">Ponto De Vendas Harley Systems — gestão de lojas</p>
         </div>
         <button
           onClick={sair}
@@ -430,15 +537,23 @@ export default function Admin() {
           </div>
         </div>
 
-        {/* Cabeçalho da lista + botão nova loja */}
+        {/* Cabeçalho da lista + botões */}
         <div className="flex items-center justify-between gap-4 mb-4">
           <h2 className="font-bold text-lg">Lojas cadastradas</h2>
-          <button
-            onClick={abrirNovaLoja}
-            className="bg-green-600 hover:bg-green-700 text-white font-bold px-5 py-2.5 rounded-xl shadow-md shadow-green-600/20 transition shrink-0"
-          >
-            + Nova Loja
-          </button>
+          <div className="flex gap-2 shrink-0">
+            <button
+              onClick={abrirLoginPainel}
+              className="bg-white hover:bg-gray-100 border border-gray-300 text-gray-700 font-bold px-5 py-2.5 rounded-xl shadow-sm transition"
+            >
+              Login do Painel
+            </button>
+            <button
+              onClick={abrirNovaLoja}
+              className="bg-green-600 hover:bg-green-700 text-white font-bold px-5 py-2.5 rounded-xl shadow-md shadow-green-600/20 transition"
+            >
+              + Nova Loja
+            </button>
+          </div>
         </div>
 
         {/* Tabela de lojas */}
@@ -505,6 +620,13 @@ export default function Admin() {
                             className="bg-gray-100 hover:bg-gray-200 text-gray-700 disabled:opacity-50 text-xs font-bold px-3 py-1.5 rounded-lg transition"
                           >
                             Editar Vencimento
+                          </button>
+                          <button
+                            onClick={() => abrirLoginLoja(loja)}
+                            disabled={salvando}
+                            className="bg-indigo-100 hover:bg-indigo-200 text-indigo-700 disabled:opacity-50 text-xs font-bold px-3 py-1.5 rounded-lg transition"
+                          >
+                            Editar Login
                           </button>
                         </div>
                       </td>
@@ -635,6 +757,129 @@ export default function Admin() {
                 <button
                   type="button"
                   onClick={() => setModalVencimento(null)}
+                  className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-5 rounded-xl text-sm font-semibold"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL: EDITAR LOGIN DA LOJA ================= */}
+      {modalLoginLoja && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 w-[480px] max-w-full max-h-[90vh] overflow-y-auto">
+            <h3 className="text-lg font-extrabold mb-1">Editar Login da Loja</h3>
+            <p className="text-sm text-gray-500 mb-4">{modalLoginLoja.nome_loja}</p>
+            <form onSubmit={salvarLoginLoja} className="flex flex-col gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1">
+                  E-mail do Dono *
+                </label>
+                <input
+                  type="email"
+                  value={formLoginLoja.email}
+                  onChange={(e) => setFormLoginLoja({ ...formLoginLoja, email: e.target.value })}
+                  className={inputClasse}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1">
+                  Nova Senha
+                </label>
+                <input
+                  type="text"
+                  value={formLoginLoja.senha}
+                  onChange={(e) => setFormLoginLoja({ ...formLoginLoja, senha: e.target.value })}
+                  placeholder="Deixe vazio para manter a senha atual"
+                  className={inputClasse}
+                />
+                <p className="text-[11px] text-gray-400 mt-1">
+                  Mínimo 4 caracteres. A senha atual continua valendo se este campo ficar vazio.
+                </p>
+              </div>
+              <div className="flex gap-2 mt-2">
+                <button
+                  type="submit"
+                  disabled={salvando}
+                  className="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold py-3 rounded-xl transition"
+                >
+                  {salvando ? "Salvando..." : "Salvar Login"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setModalLoginLoja(null)}
+                  className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-5 rounded-xl text-sm font-semibold"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL: EDITAR LOGIN DO PAINEL ================= */}
+      {modalLoginPainel && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 w-[480px] max-w-full max-h-[90vh] overflow-y-auto">
+            <h3 className="text-lg font-extrabold mb-1">Login do Painel (Super Admin)</h3>
+            <p className="text-sm text-gray-500 mb-4">
+              Troque o e-mail e a senha de entrada do painel. Na próxima vez, entre com o novo login.
+            </p>
+            <form onSubmit={salvarLoginPainel} className="flex flex-col gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1">
+                  Senha Atual *
+                </label>
+                <input
+                  type="password"
+                  value={formLoginPainel.senhaAtual}
+                  onChange={(e) => setFormLoginPainel({ ...formLoginPainel, senhaAtual: e.target.value })}
+                  placeholder="Comprove que você é o admin"
+                  autoFocus
+                  className={inputClasse}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1">
+                  E-mail do Painel *
+                </label>
+                <input
+                  type="email"
+                  value={formLoginPainel.email}
+                  onChange={(e) => setFormLoginPainel({ ...formLoginPainel, email: e.target.value })}
+                  className={inputClasse}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1">
+                  Nova Senha
+                </label>
+                <input
+                  type="text"
+                  value={formLoginPainel.novaSenha}
+                  onChange={(e) => setFormLoginPainel({ ...formLoginPainel, novaSenha: e.target.value })}
+                  placeholder="Deixe vazio para manter a senha atual"
+                  className={inputClasse}
+                />
+                <p className="text-[11px] text-gray-400 mt-1">
+                  Mínimo 4 caracteres. Se ficar vazio, só o e-mail muda.
+                </p>
+              </div>
+              <div className="flex gap-2 mt-2">
+                <button
+                  type="submit"
+                  disabled={salvando}
+                  className="flex-1 bg-[#2563EB] hover:bg-[#1E40AF] disabled:opacity-50 text-white font-bold py-3 rounded-xl transition"
+                >
+                  {salvando ? "Salvando..." : "Salvar Login do Painel"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setModalLoginPainel(false)}
                   className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-5 rounded-xl text-sm font-semibold"
                 >
                   Cancelar

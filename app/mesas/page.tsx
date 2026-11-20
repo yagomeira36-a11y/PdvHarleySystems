@@ -1,7 +1,7 @@
 "use client";
 
 // ============================================================
-// PÁGINA /mesas — GERENCIAMENTO DE MESAS (visual PdvDaGalera)
+// PÁGINA /mesas — GERENCIAMENTO DE MESAS (visual Ponto De Vendas Harley Systems)
 // Usa o layout compartilhado (sidebar roxa) e mostra:
 // - Card "Salão Principal" + grade de mesas clicáveis
 // - Lê/grava a tabela "mesas" do Supabase. Loja nova começa

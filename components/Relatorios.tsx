@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   getSupabase,
   getSessao,
@@ -10,6 +10,14 @@ import {
   OrderItem,
 } from "@/lib/supabase";
 import { filtrarPedidosCancelados } from "@/lib/pedidos";
+import {
+  montarRelatorio,
+  renderHtmlRelatorio,
+  type PedidoRelatorio,
+  type ItemRelatorio,
+  type ProdutoRelatorio,
+  type RelatorioImpressao,
+} from "@/lib/relatorio-impressao";
 
 type Periodo = "dia" | "mes" | "ano" | "tudo";
 type PontoGrafico = { rotulo: string; descricao: string; total: number; pedidos: number };
@@ -122,14 +130,152 @@ function GraficoVendas({ pontos }: { pontos: PontoGrafico[] }) {
   );
 }
 
+// ------------------------------------------------------------
+// IMPRESSÃO / PDF — referência de período e cálculo
+// ------------------------------------------------------------
+type RefImpressao = { modo: "dia" | "mes" | "ano"; ano: number; mes: number; dia: number };
+
+const NOMES_MES = [
+  "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+  "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
+];
+
+function hojeRef(): RefImpressao {
+  const d = new Date();
+  return { modo: "mes", ano: d.getFullYear(), mes: d.getMonth() + 1, dia: d.getDate() };
+}
+
+function intervaloImpressao(ref: RefImpressao): {
+  inicio: number; fim: number; inicioAnterior: number; fimAnterior: number; rotulo: string;
+} {
+  if (ref.modo === "ano") {
+    return {
+      inicio: new Date(ref.ano, 0, 1).getTime(),
+      fim: new Date(ref.ano + 1, 0, 1).getTime(),
+      inicioAnterior: new Date(ref.ano - 1, 0, 1).getTime(),
+      fimAnterior: new Date(ref.ano, 0, 1).getTime(),
+      rotulo: String(ref.ano),
+    };
+  }
+  if (ref.modo === "dia") {
+    const ini = new Date(ref.ano, ref.mes - 1, ref.dia);
+    const fim = new Date(ref.ano, ref.mes - 1, ref.dia + 1);
+    const iniAnt = new Date(ref.ano, ref.mes - 1, ref.dia - 1);
+    return {
+      inicio: ini.getTime(), fim: fim.getTime(),
+      inicioAnterior: iniAnt.getTime(), fimAnterior: ini.getTime(),
+      rotulo: ini.toLocaleDateString("pt-BR"),
+    };
+  }
+  const ini = new Date(ref.ano, ref.mes - 1, 1);
+  const fim = new Date(ref.ano, ref.mes, 1);
+  const iniAnt = new Date(ref.ano, ref.mes - 2, 1);
+  return {
+    inicio: ini.getTime(), fim: fim.getTime(),
+    inicioAnterior: iniAnt.getTime(), fimAnterior: ini.getTime(),
+    rotulo: `${NOMES_MES[ref.mes - 1]}/${ref.ano}`,
+  };
+}
+
+function Bloco({ titulo, children }: { titulo: string; children: React.ReactNode }) {
+  return (
+    <section className="border border-gray-200 rounded-xl p-3">
+      <h3 className="font-extrabold text-sm mb-2 text-gray-800">{titulo}</h3>
+      {children}
+    </section>
+  );
+}
+
+function TabelaSimples({ linhas }: { linhas: { nome: string; qtd: number; total: number }[] }) {
+  if (!linhas.length) return <p className="text-xs text-gray-400">Nenhum item.</p>;
+  return (
+    <table className="w-full text-xs">
+      <tbody className="divide-y divide-gray-100">
+        {linhas.map((l) => (
+          <tr key={l.nome}><td className="py-1 pr-2">{l.nome}</td><td className="py-1 text-right">{l.qtd}</td><td className="py-1 text-right font-semibold">{formatarMoeda(l.total)}</td></tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function PreviaRelatorio({ r }: { r: RelatorioImpressao }) {
+  const lucroTxt = r.resumo.lucroBruto === null ? "—" : formatarMoeda(r.resumo.lucroBruto);
+  return (
+    <div className="flex flex-col gap-3 text-gray-900">
+      <Bloco titulo="1. Resumo">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
+          <div><p className="text-gray-500">Total vendido</p><p className="font-bold text-sm">{formatarMoeda(r.resumo.totalVendido)}</p></div>
+          <div><p className="text-gray-500">Qtd pedidos</p><p className="font-bold text-sm">{r.resumo.qtdPedidos}</p></div>
+          <div><p className="text-gray-500">Ticket médio</p><p className="font-bold text-sm">{formatarMoeda(r.resumo.ticketMedio)}</p></div>
+          <div><p className="text-gray-500">Lucro bruto</p><p className="font-bold text-sm text-green-700">{lucroTxt}</p></div>
+          <div><p className="text-gray-500">Dia que mais vendeu</p><p className="font-bold text-sm">{r.resumo.melhorDia ? `${r.resumo.melhorDia.rotulo} · ${formatarMoeda(r.resumo.melhorDia.total)}` : "—"}</p></div>
+          <div><p className="text-gray-500">Pico / Dia forte</p><p className="font-bold text-sm">{r.horarios.picoHora || "—"} · {r.horarios.melhorDiaSemana || "—"}</p></div>
+        </div>
+      </Bloco>
+
+      <Bloco titulo="2. Por canal">
+        <table className="w-full text-xs">
+          <thead><tr className="text-left text-gray-500"><th className="py-1">Canal</th><th className="py-1 text-right">Qtd</th><th className="py-1 text-right">Total</th><th className="py-1 text-right">Ticket</th></tr></thead>
+          <tbody className="divide-y divide-gray-100">
+            {r.canais.map((c) => (
+              <tr key={c.rotulo}><td className="py-1">{c.rotulo}</td><td className="py-1 text-right">{c.qtd}</td><td className="py-1 text-right font-semibold">{formatarMoeda(c.total)}</td><td className="py-1 text-right">{formatarMoeda(c.ticket)}</td></tr>
+            ))}
+          </tbody>
+        </table>
+      </Bloco>
+
+      <Bloco titulo="3. Pagamento">
+        <table className="w-full text-xs">
+          <thead><tr className="text-left text-gray-500"><th className="py-1">Forma</th><th className="py-1 text-right">Qtd</th><th className="py-1 text-right">Total</th><th className="py-1 text-right">Ticket</th></tr></thead>
+          <tbody className="divide-y divide-gray-100">
+            {r.pagamentos.map((c) => (
+              <tr key={c.rotulo}><td className="py-1">{c.rotulo}</td><td className="py-1 text-right">{c.qtd}</td><td className="py-1 text-right font-semibold">{formatarMoeda(c.total)}</td><td className="py-1 text-right">{formatarMoeda(c.ticket)}</td></tr>
+            ))}
+          </tbody>
+        </table>
+      </Bloco>
+
+      <Bloco titulo="4. Produtos">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div><p className="font-bold text-xs mb-1">Top 5 mais vendidos</p><TabelaSimples linhas={r.produtos.top5} /></div>
+          <div><p className="font-bold text-xs mb-1">Top 5 menos vendidos</p><TabelaSimples linhas={r.produtos.bottom5} /></div>
+        </div>
+        <p className="text-xs mt-2"><b>Maior lucro:</b> {r.produtos.maiorLucro ? `${r.produtos.maiorLucro.nome} — ${formatarMoeda(r.produtos.maiorLucro.lucro)} (${r.produtos.maiorLucro.qtd} un.)` : "— (custo não cadastrado)"}</p>
+      </Bloco>
+
+      <Bloco titulo="5. Clientes">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs mb-2">
+          <div><p className="text-gray-500">Novos</p><p className="font-bold text-sm">{r.clientes.novos}</p></div>
+          <div><p className="text-gray-500">Voltaram</p><p className="font-bold text-sm">{r.clientes.voltaram}</p></div>
+          <div><p className="text-gray-500">Pararam</p><p className="font-bold text-sm">{r.clientes.pararam}</p></div>
+          <div><p className="text-gray-500">Ativos</p><p className="font-bold text-sm">{r.clientes.ativos}</p></div>
+        </div>
+        <p className="text-xs"><b>Mais comprou:</b> {r.clientes.top ? `${r.clientes.top.nome} — ${r.clientes.top.qtd} pedido(s), ${formatarMoeda(r.clientes.top.total)}` : "—"}</p>
+      </Bloco>
+
+      <Bloco titulo="6. Horários">
+        <div className="grid grid-cols-2 gap-2 text-xs">
+          <div><p className="text-gray-500">Horário de pico</p><p className="font-bold text-sm">{r.horarios.picoHora || "—"}</p></div>
+          <div><p className="text-gray-500">Dia da semana que mais vende</p><p className="font-bold text-sm">{r.horarios.melhorDiaSemana || "—"}</p></div>
+        </div>
+      </Bloco>
+    </div>
+  );
+}
+
 export default function Relatorios({ refreshKey }: { refreshKey: number }) {
   const supabase = getSupabase();
   const [pedidos, setPedidos] = useState<Order[]>([]);
   const [itens, setItens] = useState<OrderItem[]>([]);
+  const [produtos, setProdutos] = useState<ProdutoRelatorio[]>([]);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   const [periodo, setPeriodo] = useState<Periodo>("dia");
   const [dataSelecionada, setDataSelecionada] = useState(() => dataLocal(new Date()));
+  // Impressão/PDF: período próprio (padrão mês atual) + prévia + erro
+  const [refImpressao, setRefImpressao] = useState<RefImpressao>(() => hojeRef());
+  const [erroImpressao, setErroImpressao] = useState<string | null>(null);
 
   async function carregar() {
     const sessao = getSessao();
@@ -158,6 +304,14 @@ export default function Relatorios({ refreshKey }: { refreshKey: number }) {
       const [ordens, linhas] = await Promise.all([buscarTodos("orders"), buscarTodos("order_items")]);
       setPedidos((ordens as Order[]).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()));
       setItens(linhas as OrderItem[]);
+      // products só serve para exibir o nome do produto no relatório; se falhar,
+      // o relatório ainda sai com "Produto removido".
+      const { data: prods } = await supabase!
+        .from("products")
+        .select("id,name,cost")
+        .eq("loja_id", sessao!.id)
+        .limit(5000);
+      setProdutos((prods || []) as ProdutoRelatorio[]);
     } catch (e) {
       setErro("Erro ao carregar relatórios: " + (e instanceof Error ? e.message : "Confira sua conexão."));
     } finally {
@@ -242,6 +396,52 @@ export default function Relatorios({ refreshKey }: { refreshKey: number }) {
       rotuloAno: String(ano),
     };
   }, [pedidos, itens, periodo, dataSelecionada]);
+
+  // Prévia e dados do relatório de impressão (usa refImpressao, independente do filtro do topo)
+  const dadosImpressao = useMemo(() => {
+    const { inicio, fim, inicioAnterior, fimAnterior, rotulo } = intervaloImpressao(refImpressao);
+    const r = montarRelatorio({
+      pedidos: pedidos as unknown as PedidoRelatorio[],
+      itens: itens as unknown as ItemRelatorio[],
+      produtos,
+      inicio, fim, inicioAnterior, fimAnterior,
+    });
+    return { r, rotulo };
+  }, [pedidos, itens, produtos, refImpressao]);
+
+  const anosDisponiveis = useMemo(() => {
+    const atual = new Date().getFullYear();
+    const set = new Set<number>([atual, ...Array.from({ length: 11 }, (_, i) => atual - i)]);
+    pedidos.forEach((p) => set.add(new Date(p.created_at).getFullYear()));
+    return [...set].sort((a, b) => b - a);
+  }, [pedidos]);
+
+  function imprimirRelatorio() {
+    const sessao = getSessao();
+    const html = renderHtmlRelatorio(dadosImpressao.r, {
+      nomeLoja: sessao?.nome_loja || "Loja",
+      periodo: dadosImpressao.rotulo,
+    });
+    const w = window.open("", "_blank", "width=900,height=1200");
+    if (!w) {
+      setErroImpressao("Seu navegador bloqueou a janela de impressão. Permita pop-ups neste site e tente de novo.");
+      return;
+    }
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+    w.focus();
+    setTimeout(() => { try { w.print(); } catch { /* usuário pode imprimir manualmente */ } }, 400);
+  }
+
+  function escolherAno(valor: string) {
+    setRefImpressao((r) => ({ ...r, ano: Number(valor) || r.ano }));
+  }
+  function escolherMes(valor: string) {
+    if (valor === "ano") { setRefImpressao((r) => ({ ...r, modo: "ano" })); return; }
+    const m = Number(valor);
+    if (m >= 1 && m <= 12) setRefImpressao((r) => ({ ...r, modo: "mes", mes: m }));
+  }
 
   function escolherData(valor: string, tipo: "dia" | "mes" | "ano") {
     if (!valor) return;
@@ -415,6 +615,48 @@ export default function Relatorios({ refreshKey }: { refreshKey: number }) {
                     })}
                   </tbody>
                 </table>
+              )}
+            </div>
+          </section>
+
+          <section aria-label="Imprimir relatório / PDF" className="bg-white rounded-2xl border border-gray-200 p-4 sm:p-5">
+            <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
+              <div>
+                <h2 className="font-extrabold text-lg">Imprimir relatório / PDF</h2>
+                <p className="text-sm text-gray-500">Escolha mês e ano. A prévia abaixo é exatamente o que sai na impressão (versão limpa, sem menus).</p>
+              </div>
+              <button onClick={imprimirRelatorio} className="bg-blue-600 hover:bg-blue-700 text-white font-extrabold px-5 py-2.5 rounded-lg text-sm shadow-sm">
+                Imprimir / Salvar PDF
+              </button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 mb-3">
+              <button onClick={() => { const d = new Date(); setRefImpressao({ modo: "dia", ano: d.getFullYear(), mes: d.getMonth() + 1, dia: d.getDate() }); }} className={`px-3 py-1.5 text-sm font-bold rounded-lg ${refImpressao.modo === "dia" ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>Hoje</button>
+              <button onClick={() => setRefImpressao({ ...refImpressao, modo: "mes" })} className="px-3 py-1.5 text-sm font-bold rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200">Esse Mês</button>
+              <button onClick={() => { const d = new Date(); setRefImpressao({ modo: "mes", ano: d.getFullYear(), mes: d.getMonth() === 0 ? 12 : d.getMonth(), dia: 1 }); }} className="px-3 py-1.5 text-sm font-bold rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200">Mês Passado</button>
+              <button onClick={() => setRefImpressao((r) => ({ ...r, modo: "ano" }))} className="px-3 py-1.5 text-sm font-bold rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200">Esse Ano</button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 mb-3 text-sm">
+              <label className="font-bold text-gray-600">Mês</label>
+              <select value={refImpressao.modo === "ano" ? "ano" : String(refImpressao.mes)} onChange={(e) => escolherMes(e.target.value)} className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5">
+                <option value="ano">Ano todo</option>
+                {NOMES_MES.map((nome, i) => <option key={nome} value={i + 1}>{nome}</option>)}
+              </select>
+              <label className="font-bold text-gray-600 ml-2">Ano</label>
+              <select value={String(refImpressao.ano)} onChange={(e) => escolherAno(e.target.value)} className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5">
+                {anosDisponiveis.map((ano) => <option key={ano} value={ano}>{ano}</option>)}
+              </select>
+              <span className="ml-auto font-extrabold text-blue-700">Período: {dadosImpressao.rotulo}</span>
+            </div>
+
+            {erroImpressao && <p role="alert" className="bg-red-50 text-red-700 border border-red-200 rounded-lg p-3 mb-3 text-sm">{erroImpressao}</p>}
+
+            <div className="border-t border-gray-100 pt-4">
+              {dadosImpressao.r.resumo.qtdPedidos === 0 ? (
+                <p className="text-sm text-gray-500">Nenhuma venda em {dadosImpressao.rotulo} para imprimir.</p>
+              ) : (
+                <PreviaRelatorio r={dadosImpressao.r} />
               )}
             </div>
           </section>

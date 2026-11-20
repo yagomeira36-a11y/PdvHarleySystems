@@ -261,11 +261,11 @@ export async function imprimirDadosQz(dados: DadosImpressao, config: ConfigImpre
       }
       const bytes = grupo.documentos.reduce((total, documento) => total + documento.bytes.length, 0);
       try {
-        const configuracao = qz.configs.create(grupo.nome, { copies: 1, jobName: `PDVDG ${dados.teste ? "TESTE" : rotuloPedidoQz(dados.pedido)}`, encoding: "ISO-8859-1" });
+        const configuracao = qz.configs.create(grupo.nome, { copies: 1, jobName: `Harley Systems ${dados.teste ? "TESTE" : rotuloPedidoQz(dados.pedido)}`, encoding: "ISO-8859-1" });
         const data = grupo.documentos.map(({ bytes }) => ({ type: "raw" as const, format: "command" as const, flavor: "base64" as const, data: base64(bytes) }));
-        console.info("[PDVDG QZ] Chamando qz.print", { impressora: grupo.nome, documentos: data.length, bytes });
+        console.info("[Harley Systems QZ] Chamando qz.print", { impressora: grupo.nome, documentos: data.length, bytes });
         await qz.print(configuracao, data);
-        console.info("[PDVDG QZ] Envio aceito pelo QZ", { impressora: grupo.nome, bytes });
+        console.info("[Harley Systems QZ] Envio aceito pelo QZ", { impressora: grupo.nome, bytes });
       } catch (erro) {
         if (!dados.teste) {
           grupo.documentos.forEach(({ tipo }) => { registro[tipo] = { estado: "incerto", data: new Date().toISOString() }; });
@@ -305,9 +305,9 @@ export async function imprimirExtratoQz(dados: DadosExtrato, config: ConfigImpre
     }
     const problema = problemaImpressora(config.impressoraCliente);
     if (problema) return imprimirExtratoNoNavegador(dados);
-    const configuracao = qz.configs.create(config.impressoraCliente, { copies: 1, jobName: "PDVDG EXTRATO", encoding: "ISO-8859-1" });
+    const configuracao = qz.configs.create(config.impressoraCliente, { copies: 1, jobName: "Harley Systems EXTRATO", encoding: "ISO-8859-1" });
     const data = [{ type: "raw" as const, format: "command" as const, flavor: "base64" as const, data: base64(bytes) }];
-    console.info("[PDVDG QZ] Chamando qz.print (extrato)", { impressora: config.impressoraCliente, bytes: bytes.length });
+    console.info("[Harley Systems QZ] Chamando qz.print (extrato)", { impressora: config.impressoraCliente, bytes: bytes.length });
     try {
       await qz.print(configuracao, data);
       return `Extrato enviado ao QZ Tray (${config.impressoraCliente}: ${bytes.length} bytes). O retorno confirma o envio à fila, não a saída física do papel; confira o destino.`;

@@ -1,5 +1,5 @@
 // Cliente do Supabase (conexão com o banco de dados)
-import { createClient, SupabaseClient } from "@supabase/supabase-js/dist/index.cjs";
+import { createClient, SupabaseClient } from "@supabase/supabase-js";
 
 // URL e chave pública do Supabase (vêm do arquivo .env.local)
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -58,6 +58,8 @@ export type Order = {
   observacao?: string | null;
   motivo_cancelamento?: string | null;
   cancelado_em?: string | null;
+  cancelado_por?: string | null;
+  origem?: string | null; // canal de entrada (PDV, WhatsApp, Bot...)
   items?: Array<{
     product_id: string;
     name: string;
@@ -140,6 +142,15 @@ export type Cliente = {
 // Deixa o telefone só com números (ex: "(11) 98888-7777" -> "11988887777")
 export function normalizarTelefone(telefone: string): string {
   return telefone.replace(/\D/g, "");
+}
+
+// Monta o link de conversa wa.me a partir do telefone do cliente.
+// Sem DDD (menos de 10 dígitos) retorna null — não abre conversa.
+export function linkWhatsApp(telefone: string | null | undefined): string | null {
+  const digitos = normalizarTelefone(telefone || "");
+  if (digitos.length < 10) return null;
+  const comCodigoPais = digitos.startsWith("55") ? digitos : `55${digitos}`;
+  return `https://wa.me/${comCodigoPais}`;
 }
 
 // ============================================================

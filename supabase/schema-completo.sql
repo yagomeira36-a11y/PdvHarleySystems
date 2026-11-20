@@ -1,5 +1,5 @@
 -- ============================================================
--- PdvDaGalera — SCHEMA COMPLETO (Supabase / PostgreSQL)
+-- Ponto De Vendas Harley Systems — SCHEMA COMPLETO (Supabase / PostgreSQL)
 -- ============================================================
 -- ARQUIVO ÚNICO: cria o banco inteiro do zero, sem erro.
 --

@@ -13,9 +13,10 @@ import TelaCaixa from "./Caixa";
 import Relatorios from "./Relatorios";
 import TelaFiado from "./Fiado";
 import LojaOnline from "./LojaOnline";
+import Clientes from "./Clientes";
 
 // Seções acessíveis pelo hub
-type Secao = "hub" | "loja-online" | "cadastrar" | "estoque" | "caixa" | "relatorios" | "fiado";
+type Secao = "hub" | "loja-online" | "cadastrar" | "estoque" | "caixa" | "relatorios" | "fiado" | "clientes";
 
 // ============================================================
 // ÍCONES DO HUB (um para cada "janelinha")
@@ -76,6 +77,16 @@ function IconeLojaOnline() {
   );
 }
 
+function IconeClientes() {
+  return (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+      <circle cx="10" cy="7" r="4" />
+      <path d="M20 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
+    </svg>
+  );
+}
+
 // ============================================================
 // JANELINHAS DO HUB (ícone + título + descrição)
 // ============================================================
@@ -114,6 +125,12 @@ const CARTOES: {
     titulo: "Relatórios",
     descricao: "Vendas, lucro e resumo por período.",
     icone: <IconeRelatorio />,
+  },
+  {
+    id: "clientes",
+    titulo: "Clientes",
+    descricao: "Cadastros com nome, telefone e endereço.",
+    icone: <IconeClientes />,
   },
   {
     id: "fiado",
@@ -161,6 +178,7 @@ export default function GerenciamentoLoja({ refreshKey }: { refreshKey: number }
           {secao === "relatorios" && <Relatorios refreshKey={refreshKey} />}
           {secao === "fiado" && <TelaFiado />}
           {secao === "loja-online" && <LojaOnline />}
+          {secao === "clientes" && <Clientes />}
         </div>
       </div>
     );

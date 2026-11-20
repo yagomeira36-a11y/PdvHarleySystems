@@ -1,5 +1,5 @@
 // ============================================================
-// REGRA DE ACESSO DA LOJA (SaaS PdvDaGalera)
+// REGRA DE ACESSO DA LOJA (SaaS Ponto De Vendas Harley Systems)
 // A loja perde o PDV e fica só com a tela de pagamento
 // (/pagamento — Pix, copia e cola e boleto) quando:
 //  - o admin ou o Asaas marcou como "vencido" ou "bloqueado"; ou

@@ -1,7 +1,7 @@
 "use client";
 
 // ============================================================
-// TELA DE LOGIN (SaaS PdvDaGalera)
+// TELA DE LOGIN (SaaS Ponto De Vendas Harley Systems)
 // - E-mail + senha (sem botão de criar conta)
 // - Senha errada -> "Acesso negado"
 // - Loja vencida ou bloqueada -> /pagamento (só a tela do Asaas)
@@ -9,10 +9,11 @@
 // - Visual azul igual à sidebar do sistema
 // ============================================================
 import { useState } from "react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { getSupabase, salvarSessao, sha256Hex, Sessao } from "@/lib/supabase";
 import { lojaSemAcesso } from "@/lib/acesso-loja";
-import { ADMIN_EMAIL, ADMIN_SENHA } from "@/lib/admin";
+import { validarLoginSuperAdmin } from "@/lib/admin";
 
 export default function Login() {
   const router = useRouter();
@@ -32,12 +33,16 @@ export default function Login() {
     }
 
     // Credenciais do super admin nesta mesma tela -> painel /admin
-    if (
-      email.trim().toLowerCase() === ADMIN_EMAIL.toLowerCase() &&
-      senha === ADMIN_SENHA
-    ) {
+    // (a senha editável pelo painel vale assim que o SQL for rodado;
+    // sem o SQL, cai nas credenciais fixas do código)
+    const adminOk = await validarLoginSuperAdmin(email, senha);
+    if (adminOk.ok) {
       sessionStorage.setItem("menUAU_admin_ok", "1");
       router.replace("/admin");
+      return;
+    }
+    if (adminOk.erro) {
+      setErro(adminOk.erro);
       return;
     }
 
@@ -101,23 +106,18 @@ export default function Login() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#2563EB] to-[#1D4ED8] flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-8">
-        {/* Caixa padrão enquanto o ícone da loja não for escolhido */}
         <div className="text-center mb-8">
-          <div className="relative inline-block">
-            <div className="bg-gradient-to-b from-gray-400 to-gray-600 rounded-2xl px-8 py-3 shadow-[0_4px_10px_rgba(0,0,0,0.3),inset_0_2px_3px_rgba(255,255,255,0.35)] border border-white/40">
-              <p
-                className="text-sm font-black leading-tight text-white"
-                style={{
-                  textShadow:
-                    "1px 1px 0 #4b5563, 2px 2px 0 #374151, 3px 3px 0 #1f2937, 4px 4px 8px rgba(0,0,0,0.45)",
-                }}
-              >
-                Escolha seu ícone no layout
-              </p>
-            </div>
-            <div className="absolute -bottom-1.5 left-10 w-3.5 h-3.5 bg-gray-600 rotate-45 rounded-sm" />
-          </div>
-          <p className="text-sm text-gray-500 mt-4">Ponto de Venda &amp; KDS</p>
+          <Image
+            src="/harley-system-logo.jpeg"
+            alt="Harley Systems"
+            width={1153}
+            height={768}
+            className="mx-auto h-auto w-full max-w-xs"
+            priority
+          />
+          <p className="text-sm text-gray-500 mt-4">
+            Ponto De Vendas Harley Systems
+          </p>
         </div>
 
         {/* Erro */}
@@ -164,7 +164,7 @@ export default function Login() {
         </form>
 
         <p className="text-center text-[11px] text-gray-400 mt-6">
-          Loja de demonstração: demo@menuau.com / 123456
+          Deu erro no login? Nos contate: +55 11 95925-6735.
         </p>
       </div>
     </div>

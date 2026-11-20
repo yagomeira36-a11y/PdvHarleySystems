@@ -73,8 +73,8 @@ export function definicaoMenu(id: MenuId): MenuDef {
 // Ordena/valida os menus salvos e completa com os que faltarem (ex: um
 // menu novo criado numa versão mais recente). Os menus "Gerenciamento de
 // loja" e "Configurações" nunca podem ficar escondidos: é por eles que o
-// dono acessa Cadastrar Produto, Estoque, Caixa, Relatórios, Layout,
-// Motoboys e Bot Assistente.
+// dono acessa Cadastrar Produto, Estoque, Caixa, Relatórios, Layout e
+// Motoboys.
 export function menusOrdenados(salvo?: MenuConfig[] | null): MenuConfig[] {
   const validos = new Set<string>(MENUS_CATALOGO.map((d) => d.id));
   const fixos = new Set<string>(["gerenciamento", "configuracoes"]);

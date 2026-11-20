@@ -8,7 +8,7 @@ const config: Config = {
   ],
   theme: {
     extend: {
-      // Cores do tema claro (visual PdvDaGalera)
+      // Cores do tema claro (Ponto De Vendas Harley Systems)
       colors: {
         fundo: "#F3F4F6",   // fundo geral (cinza claro)
         card: "#FFFFFF",    // fundo dos cards (branco)

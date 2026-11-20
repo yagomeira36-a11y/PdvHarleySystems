@@ -17,8 +17,7 @@ function hojeISO(): string {
 // Confere as faturas no Asaas e acerta o status da loja:
 // - tem fatura atrasada  -> bloqueado
 // - tem fatura paga      -> ativo
-// É o botão "Já paguei" da tela /pagamento (serve para testar
-// no sandbox, sem depender do webhook chegar até a sua máquina).
+// É o botão "Já paguei" da tela /pagamento.
 // ============================================================
 export async function POST(req: Request) {
   const corpo = (await req.json().catch(() => null)) as { loja?: string } | null;

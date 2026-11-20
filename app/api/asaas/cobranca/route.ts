@@ -4,6 +4,7 @@ import {
   VALOR_MENSALIDADE,
   buscarCobrancaAberta,
   buscarPixAsaas,
+  buscarBoletoAsaas,
 } from "@/lib/asaas";
 
 export const runtime = "nodejs";
@@ -30,7 +31,7 @@ export async function GET(req: Request) {
 
   const { data: loja, error } = await supabase
     .from("lojas")
-    .select("id,status_pagamento,data_vencimento,asaas_customer_id")
+    .select("id,status_pagamento,data_vencimento,asaas_customer_id,asaas_subscription_id")
     .eq("id", lojaId)
     .maybeSingle();
 
@@ -49,8 +50,12 @@ export async function GET(req: Request) {
       valor: number;
       vencimento: string;
       linkFatura: string | null;
+      linkBoleto: string | null;
     } | null,
     pix: null as { imagem: string; copiaECola: string } | null,
+    pixErro: null as string | null,
+    boleto: null as { linhaDigitavel: string; codigoBarras: string } | null,
+    boletoErro: null as string | null,
   };
 
   if (!loja.asaas_customer_id) {
@@ -58,7 +63,11 @@ export async function GET(req: Request) {
   }
 
   try {
-    const cobranca = await buscarCobrancaAberta(loja.asaas_customer_id as string);
+    const cobranca = await buscarCobrancaAberta(
+      loja.asaas_customer_id as string,
+      loja.id,
+      loja.asaas_subscription_id ?? null
+    );
     if (cobranca) {
       resposta.cobranca = {
         id: cobranca.id,
@@ -66,15 +75,25 @@ export async function GET(req: Request) {
         valor: Number(cobranca.value),
         vencimento: cobranca.dueDate,
         linkFatura: cobranca.invoiceUrl ?? null,
+        linkBoleto: cobranca.bankSlipUrl ?? null,
       };
 
-      // O QR Code do Pix pode não existir (fatura só de cartão) — nesse
-      // caso a tela mostra apenas o link da fatura
-      try {
-        const pix = await buscarPixAsaas(cobranca.id);
-        resposta.pix = { imagem: pix.encodedImage, copiaECola: pix.payload };
-      } catch {
-        resposta.pix = null;
+      const [pix, boleto] = await Promise.allSettled([
+        buscarPixAsaas(cobranca.id),
+        buscarBoletoAsaas(cobranca.id),
+      ]);
+      if (pix.status === "fulfilled") {
+        resposta.pix = { imagem: pix.value.encodedImage, copiaECola: pix.value.payload };
+      } else {
+        resposta.pixErro = (pix.reason as Error).message;
+      }
+      if (boleto.status === "fulfilled") {
+        resposta.boleto = {
+          linhaDigitavel: boleto.value.identificationField,
+          codigoBarras: boleto.value.barCode,
+        };
+      } else {
+        resposta.boletoErro = (boleto.reason as Error).message;
       }
     }
   } catch (e) {

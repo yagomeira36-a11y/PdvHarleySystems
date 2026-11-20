@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabase, normalizarTelefone } from "@/lib/supabase";
-import { getWhatsAppAdminClient } from "@/lib/whatsapp/server";
 
 export const dynamic = "force-dynamic";
 
@@ -16,11 +15,6 @@ function json(body: unknown, status = 200) {
 
 function texto(value: unknown, maxLength: number) {
   return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
-}
-
-function numeroWhatsApp(value: string) {
-  const digits = normalizarTelefone(value);
-  return digits.startsWith("55") ? digits : `55${digits}`;
 }
 
 export async function POST(request: NextRequest) {
@@ -150,44 +144,21 @@ export async function POST(request: NextRequest) {
     return json({ error: "O pedido não foi concluído porque não foi possível salvar os itens." }, 502);
   }
 
-  let notificacao: "enviada" | "nao_configurada" | "falhou" = "nao_configurada";
-  const evolutionUrl = process.env.EVOLUTION_API_URL?.replace(/\/+$/, "");
-  const evolutionKey = process.env.EVOLUTION_API_KEY;
-  const whatsappAdmin = getWhatsAppAdminClient();
-  const { data: whatsappSettings, error: erroWhatsapp } = whatsappAdmin
-    ? await whatsappAdmin
-        .from("whatsapp_ai_settings")
-        .select("instance_name,connection_status")
-        .eq("loja_id", lojaId)
-        .maybeSingle()
-    : { data: null, error: null };
-  if (erroWhatsapp) {
-    console.error("Falha ao carregar instância WhatsApp da loja:", erroWhatsapp.message);
-  }
-  const evolutionInstance = whatsappSettings?.connection_status === "connected"
-    ? whatsappSettings.instance_name
-    : null;
-  if (evolutionUrl && evolutionKey && evolutionInstance) {
-    try {
-      const resposta = await fetch(
-        `${evolutionUrl}/message/sendText/${encodeURIComponent(evolutionInstance)}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json", apikey: evolutionKey },
-          body: JSON.stringify({
-            number: numeroWhatsApp(telefone),
-            text: `Olá ${nome}, recebemos seu pedido #${pedido.numero_pedido} de R$ ${total.toFixed(2).replace(".", ",")}. Já estamos preparando!`,
-          }),
-          signal: AbortSignal.timeout(7000),
-        }
-      );
-      notificacao = resposta.ok ? "enviada" : "falhou";
-      if (!resposta.ok) console.error("Evolution API recusou a notificação do pedido:", resposta.status);
-    } catch (error) {
-      notificacao = "falhou";
-      console.error("Falha ao enviar notificação pela Evolution API:", error);
+  if (tipo === "Entrega") {
+    const { error: erroCliente } = await supabase.from("clientes").upsert(
+      {
+        loja_id: lojaId,
+        nome,
+        telefone,
+        endereco: enderecoCompleto,
+        complemento: complemento || null,
+      },
+      { onConflict: "loja_id,telefone" }
+    );
+    if (erroCliente) {
+      console.error("Pedido delivery salvo, mas não foi possível salvar os dados do cliente:", erroCliente.message);
     }
   }
 
-  return json({ pedido, notificacao }, 201);
+  return json({ pedido }, 201);
 }
