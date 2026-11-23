@@ -232,7 +232,7 @@ export default function Configuracoes({
     const config = (resConfig.data || null) as Configuracao | null;
     setEmpresa(config);
     setForm({
-      nome_empresa: config?.nome_empresa ?? "PDV Hamburgueria",
+      nome_empresa: config?.nome_empresa ?? "PDV HarleySystems",
       cnpj: config?.cnpj ?? "",
       telefone: config?.telefone ?? "",
       endereco: config?.endereco ?? "",
@@ -409,7 +409,7 @@ export default function Configuracoes({
         <>
           <h1 className="text-2xl font-bold mb-1">Configurações</h1>
           <p className="text-sm text-gray-400 mb-6">
-            {empresa?.nome_empresa ?? "PDV Hamburgueria"}
+            {empresa?.nome_empresa ?? "PDV HarleySystems"}
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {CARTOES.map((c) => (

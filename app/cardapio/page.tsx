@@ -256,6 +256,9 @@ function ConteudoCardapio() {
     : 0;
   const total = subtotal + taxaEntrega;
   const nomeLoja = settingsSafe.nome_loja || config?.nome_empresa || loja?.nome_loja || loja?.nome || "Minha Loja";
+  useEffect(() => {
+    document.title = nomeLoja;
+  }, [nomeLoja]);
   const categoriaLoja = settingsSafe.categoria || "";
   const telefoneFixo = normalizarTelefone(settingsSafe.telefone_fixo || config?.telefone || "");
   const telefone = normalizarTelefone(settingsSafe.whatsapp || (config as (Configuracao & { whatsapp?: string | null }) | null)?.whatsapp || "");

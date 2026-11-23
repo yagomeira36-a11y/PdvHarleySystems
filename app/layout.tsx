@@ -5,8 +5,8 @@ import "./globals.css";
 
 // Título exibido na aba do navegador
 export const metadata: Metadata = {
-  title: "PDV Hamburgueria",
-  description: "PDV para hamburgueria com delivery e motoboys",
+  title: "PDV HarleySystems",
+  description: "PDV HarleySystems com delivery e motoboys",
 };
 
 export default function RootLayout({

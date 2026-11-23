@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { urlCardapioPublico } from "@/lib/cardapio-publico";
 import { getSessao, normalizarTelefone } from "@/lib/supabase";
 import DeliveryZonesMap from "./DeliveryZonesMap";
 
@@ -221,12 +222,20 @@ export default function LojaOnline() {
 
   async function copiarLink() {
     if (!sessao) return;
-    const link = `${window.location.origin}/cardapio?loja=${encodeURIComponent(sessao.id)}`;
-    try { await navigator.clipboard.writeText(link); setMensagem("Link copiado!"); }
-    catch { setMensagem(link); }
+    const link = urlCardapioPublico(sessao.id);
+    if (!link) {
+      setMensagem("Configure NEXT_PUBLIC_CARDAPIO_URL com a URL de produção para gerar o link público do cardápio.");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(link);
+      setMensagem("Link copiado!");
+    } catch {
+      setMensagem(link);
+    }
   }
 
-  const link = sessao ? `${typeof window !== "undefined" ? window.location.origin : ""}/cardapio?loja=${encodeURIComponent(sessao.id)}` : "";
+  const link = sessao ? urlCardapioPublico(sessao.id) : "";
   const campo = "mt-2 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm";
 
   return (
@@ -235,7 +244,7 @@ export default function LojaOnline() {
         <div className="rounded-2xl border border-gray-200 bg-white p-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div><h2 className="text-lg font-black">Loja Online</h2><p className="text-sm text-gray-500">Tudo o que aparece no cardápio público.</p></div>
-            <div className="flex gap-2"><button type="button" onClick={() => void copiarLink()} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-bold">Copiar link</button><a href={link} target="_blank" rel="noreferrer" className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white">Abrir cardápio</a></div>
+            <div className="flex gap-2"><button type="button" onClick={() => void copiarLink()} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-bold">Copiar link</button><a href={link || "#"} target="_blank" rel="noreferrer" aria-disabled={!link} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white">Abrir cardápio</a></div>
           </div>
         </div>
 
