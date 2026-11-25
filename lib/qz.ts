@@ -5,8 +5,8 @@ import type { PrinterDetails, PrinterEvent } from "qz-tray";
 import { getSessao } from "./supabase";
 import type { Order } from "./supabase";
 import { caixaEstaAberto, MENSAGEM_CAIXA_FECHADO } from "./caixa";
-import { carregarDadosImpressao, lerImpressora, validarConfig } from "./impressao";
-import type { ConfigImpressora, DadosExtrato, DadosImpressao, TipoImpressao } from "./impressao";
+import { carregarDadosImpressao, lerImpressora, montarDadosImpressaoLocal, validarConfig } from "./impressao";
+import type { ConfigImpressora, DadosExtrato, DadosImpressao, ItemImpressao, TipoImpressao } from "./impressao";
 import { montarEscPos, montarExtratoEscPos } from "./escpos";
 
 type EstadoQz = { conectado: boolean; conectando: boolean; impressoras: string[]; detalhes: PrinterDetails[]; eventos: Record<string, PrinterEvent>; assinatura: boolean; mensagemAssinatura: string; avisoStatus: string };
@@ -84,9 +84,13 @@ function imprimirExtratoNoNavegador(dados: DadosExtrato): string {
   return "Extrato enviado para impressão pelo navegador.";
 }
 
-function rotuloPedidoQz(pedido: { numero_pedido?: number | null; customer_name?: string | null }): string {
-  const numero = Number(pedido.numero_pedido);
-  const base = Number.isSafeInteger(numero) && numero > 0 ? `Pedido ${numero}` : "Pedido sem número";
+function rotuloPedidoQz(pedido: { numero_pedido?: number | null; numero_exibicao?: string | null; customer_name?: string | null }): string {
+  const exibicao = (pedido.numero_exibicao ?? "").trim();
+  const base = exibicao
+    ? (/^pedido\b/i.test(exibicao) ? exibicao : `Pedido ${exibicao}`)
+    : (Number.isSafeInteger(Number(pedido.numero_pedido)) && Number(pedido.numero_pedido) > 0
+      ? `Pedido ${Number(pedido.numero_pedido)}`
+      : "Pedido sem número");
   const nome = (pedido.customer_name ?? "").trim();
   return nome ? `${base} - ${nome}` : base;
 }
@@ -322,16 +326,29 @@ export async function imprimirExtratoQz(dados: DadosExtrato, config: ConfigImpre
 }
 
 export async function imprimirPedidoAutomatico(
-  pedido: Pick<Order, "id"> & Partial<Pick<Order, "numero_pedido" | "customer_name">>
+  pedido: Pick<Order, "id"> & Partial<Pick<Order, "numero_pedido" | "customer_name" | "numero_exibicao">>,
+  dadosLocais?: DadosImpressao
 ): Promise<{ mensagem: string; erro: boolean }> {
   try {
     const sessao = getSessao();
     if (!sessao) throw new Error("Sessão da loja não encontrada.");
     const config = lerImpressora(sessao.id);
-    const dados = await carregarDadosImpressao(pedido.id);
+    const dados = dadosLocais ?? await carregarDadosImpressao(pedido.id);
     const mensagem = await imprimirDadosQz(dados, config, ["comprovante", "comanda"], true);
     return { mensagem, erro: false };
   } catch (erro) {
-    return { mensagem: `${rotuloPedidoQz(pedido)} salvo. Impressão pendente: ${erro instanceof Error ? erro.message : "falha de comunicação"} Não crie o pedido novamente. Use Imprimir em Caixa.`, erro: true };
+    return { mensagem: `${rotuloPedidoQz(pedido)} salvo. Impressão pendente: ${erro instanceof Error ? erro.message : "falha de comunicação"} Não crie o pedido novamente. Use Reimprimir no pedido.`, erro: true };
+  }
+}
+
+export async function imprimirPedidoComItensLocais(
+  pedido: Order,
+  itens: ItemImpressao[]
+): Promise<{ mensagem: string; erro: boolean }> {
+  try {
+    const dados = await montarDadosImpressaoLocal({ pedido, itens });
+    return await imprimirPedidoAutomatico(pedido, dados);
+  } catch (erro) {
+    return { mensagem: `${rotuloPedidoQz(pedido)} salvo. Impressão pendente: ${erro instanceof Error ? erro.message : "falha de comunicação"} Não crie o pedido novamente. Use Reimprimir no pedido.`, erro: true };
   }
 }

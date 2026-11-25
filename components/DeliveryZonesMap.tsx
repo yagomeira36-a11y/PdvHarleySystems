@@ -193,7 +193,7 @@ export default function DeliveryZonesMap({ lojaId, enderecoLoja }: Props) {
         </button>
       </div>
 
-      {carregando ? (
+      {carregando ?(
         <p className="py-10 text-center text-sm text-gray-400">
           Carregando zonas de entrega...
         </p>
@@ -210,7 +210,7 @@ export default function DeliveryZonesMap({ lojaId, enderecoLoja }: Props) {
             automaticamente e compartilhadas com o PDV e o cardápio online.
           </p>
 
-          {config.zonas.length === 0 ? (
+          {config.zonas.length === 0 ?(
             <p className="my-4 text-sm text-gray-400">
               Nenhuma zona criada. Crie a primeira (ex.: até 3 km = R$ 5,00).
             </p>

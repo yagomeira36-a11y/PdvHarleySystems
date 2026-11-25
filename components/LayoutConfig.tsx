@@ -9,7 +9,7 @@
 // Tudo é salvo no navegador da loja e aplica na hora.
 // ============================================================
 import { useEffect, useRef, useState } from "react";
-import { getSessao, getSupabase, Product } from "@/lib/supabase";
+import { getSessao, getSupabase } from "@/lib/supabase";
 import {
   LayoutConfig as TipoLayout,
   LAYOUT_PADRAO,
@@ -43,13 +43,6 @@ export default function LayoutConfig({
   const inputFundo = useRef<HTMLInputElement>(null);
   const inputCardapio = useRef<HTMLInputElement>(null);
 
-  const [produtos, setProdutos] = useState<Product[]>([]);
-  const fotoPara = useRef<string | null>(null);
-  const [salvandoFoto, setSalvandoFoto] = useState<string | null>(null);
-  const [carregandoProdutos, setCarregandoProdutos] = useState(true);
-  const [erroProdutoFoto, setErroProdutoFoto] = useState<string | null>(null);
-  const inputProdutoFoto = useRef<HTMLInputElement>(null);
-
   // Carrega a configuração atual da loja
   useEffect(() => {
     const s = getSessao();
@@ -62,26 +55,6 @@ export default function LayoutConfig({
     setFundo(cfg.fundo);
     setCardapio(cfg.cardapio);
     setMenus(menusOrdenados(cfg.menus));
-  }, []);
-
-  // Carrega os produtos da loja (para colocar foto em cada um)
-  useEffect(() => {
-    const s = getSessao();
-    const supabase = getSupabase();
-    if (!s || !supabase) {
-      setCarregandoProdutos(false);
-      return;
-    }
-    supabase
-      .from("products")
-      .select("*")
-      .eq("loja_id", s.id)
-      .order("code")
-      .then(({ data, error }) => {
-        if (error) setErroProdutoFoto("Erro ao carregar produtos: " + error.message);
-        else setProdutos((data || []) as Product[]);
-        setCarregandoProdutos(false);
-      });
   }, []);
 
   // ============================================================
@@ -142,57 +115,6 @@ export default function LayoutConfig({
     const leitor = new FileReader();
     leitor.onload = () => setCardapio(String(leitor.result));
     leitor.readAsDataURL(arquivo);
-  }
-
-  function escolherFotoProduto(e: React.ChangeEvent<HTMLInputElement>) {
-    const arquivo = e.target.files?.[0];
-    const produtoId = fotoPara.current;
-    e.target.value = "";
-    setErroProdutoFoto(null);
-    if (!arquivo || !produtoId || salvandoFoto) return;
-    if (!arquivo.type.startsWith("image/")) {
-      setErroProdutoFoto("Escolha um arquivo de imagem (JPG, PNG...).");
-      return;
-    }
-    if (arquivo.size > 1.5 * 1024 * 1024) {
-      setErroProdutoFoto("Imagem muito grande. Use uma de até 1,5 MB.");
-      return;
-    }
-    setSalvandoFoto(produtoId);
-    const leitor = new FileReader();
-    leitor.onload = () => atualizarFoto(produtoId, String(leitor.result));
-    leitor.onerror = () => {
-      setSalvandoFoto(null);
-      setErroProdutoFoto("Não foi possível ler a imagem. Escolha outro arquivo.");
-    };
-    leitor.readAsDataURL(arquivo);
-  }
-
-  async function atualizarFoto(produtoId: string, url: string | null) {
-    const supabase = getSupabase();
-    const s = getSessao();
-    if (!supabase || !s) {
-      setSalvandoFoto(null);
-      return;
-    }
-    setSalvandoFoto(produtoId);
-    setErroProdutoFoto(null);
-    const { data, error } = await supabase
-      .from("products")
-      .update({ image_url: url })
-      .eq("id", produtoId)
-      .eq("loja_id", s.id)
-      .select("id,image_url")
-      .maybeSingle();
-    setSalvandoFoto(null);
-    if (error || !data) {
-      setErroProdutoFoto("Erro ao salvar a foto: " + (error?.message || "produto não encontrado."));
-      return;
-    }
-    setProdutos((atual) =>
-      atual.map((p) => (p.id === produtoId ? { ...p, image_url: data.image_url } : p))
-    );
-    aoPedidoCriado(url ? "Foto do produto salva!" : "Foto do produto removida.");
   }
 
   // ============================================================
@@ -730,82 +652,6 @@ export default function LayoutConfig({
         </div>
       </div>
 
-      {/* ============ Fotos dos produtos do balcão ============ */}
-      <div className="mt-4 bg-white rounded-2xl shadow-sm border border-gray-200 p-5 max-w-5xl">
-        <p className="text-sm font-bold text-gray-700 mb-1">
-          Fotos dos produtos (Balcão)
-        </p>
-        <p className="text-xs text-gray-500 mb-4">
-          Coloque uma foto em cada produto — ela aparece na grade do balcão na
-          hora. As fotos ficam salvas no seu cadastro, não precisam do botão
-          SALVAR acima.
-        </p>
-        {erroProdutoFoto && (
-          <p className="text-xs text-red-600 mb-3 bg-red-50 border border-red-300 rounded p-2">
-            {erroProdutoFoto}
-          </p>
-        )}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-          {produtos.map((p) => (
-            <div
-              key={p.id}
-              className="flex items-center gap-3 bg-gray-50 rounded-xl p-2"
-            >
-              <img
-                src={p.image_url || "/placeholder.svg"}
-                alt={p.name}
-                className="w-12 h-12 rounded-lg object-cover border border-gray-200 shrink-0"
-              />
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-bold truncate">{p.name}</p>
-                <p className="text-xs text-gray-400 truncate">{p.category}</p>
-              </div>
-              <div className="flex items-center gap-1.5 shrink-0">
-                <button
-                  onClick={() => {
-                    fotoPara.current = p.id;
-                    inputProdutoFoto.current?.click();
-                  }}
-                  disabled={salvandoFoto !== null}
-                  aria-label={`Escolher foto de ${p.name}`}
-                  className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-2.5 py-1.5 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {salvandoFoto === p.id
-                    ? "Salvando..."
-                    : p.image_url && p.image_url !== "/placeholder.svg"
-                      ? "Trocar"
-                      : "Escolher"}
-                </button>
-                {p.image_url && p.image_url !== "/placeholder.svg" && (
-                  <button
-                    onClick={() => atualizarFoto(p.id, null)}
-                    disabled={salvandoFoto !== null}
-                    aria-label={`Remover foto de ${p.name}`}
-                    className="text-xs text-red-500 hover:text-red-700 font-bold px-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Remover
-                  </button>
-                )}
-              </div>
-            </div>
-          ))}
-          {carregandoProdutos && (
-            <p className="text-xs text-gray-400 py-2">Carregando produtos...</p>
-          )}
-          {!carregandoProdutos && !erroProdutoFoto && produtos.length === 0 && (
-            <p className="text-xs text-gray-400 py-2">
-              Nenhum produto cadastrado ainda.
-            </p>
-          )}
-        </div>
-        <input
-          ref={inputProdutoFoto}
-          type="file"
-          accept="image/*"
-          onChange={escolherFotoProduto}
-          className="hidden"
-        />
-      </div>
     </div>
   );
 }

@@ -95,7 +95,7 @@ CREATE TABLE public.products (
   name       TEXT NOT NULL,                         -- nome do produto
   price      NUMERIC(10,2) NOT NULL DEFAULT 0,      -- preço de venda
   cost       NUMERIC(10,2) NOT NULL DEFAULT 0,      -- custo de produção (lucro)
-  category   TEXT NOT NULL DEFAULT 'HAMBÚRGUER',    -- categoria (texto livre)
+  category   TEXT NOT NULL DEFAULT 'TODOS',    -- categoria (texto livre)
   image_url  TEXT,                                  -- foto do produto
   description TEXT,
   available  BOOLEAN NOT NULL DEFAULT true,

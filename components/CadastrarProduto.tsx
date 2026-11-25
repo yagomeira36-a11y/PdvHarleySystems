@@ -6,7 +6,7 @@
 // criar, listar, editar e excluir (nome, preço, custo,
 // categoria, código e foto)
 // ============================================================
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import {
   getSupabase,
   getSessao,
@@ -14,7 +14,7 @@ import {
   Product,
   Categoria,
 } from "@/lib/supabase";
-import { CATEGORIAS_PADRAO, lerCategorias } from "@/lib/categorias";
+import { CATEGORIAS_PADRAO, lerCategorias, salvarCategorias } from "@/lib/categorias";
 import { lerCardapioDaFoto } from "@/lib/cardapio-foto";
 
 // Campos do formulário (texto para facilitar a digitação)
@@ -25,6 +25,7 @@ type FormProduto = {
   codigo: string;
   descricao: string;
   disponivel: boolean;
+  foto: string | null;
 };
 
 // Item lido da foto, em revisão antes de salvar
@@ -41,10 +42,11 @@ type ItemRevisao = {
 const FORM_VAZIO: FormProduto = {
   nome: "",
   preco: "",
-  categoria: "HAMBÚRGUER",
+  categoria: "TODOS",
   codigo: "",
   descricao: "",
   disponivel: true,
+  foto: null,
 };
 
 function mensagemColunaProdutoAusente(erro: string): string | null {
@@ -66,8 +68,11 @@ export default function CadastrarProduto() {
   const [editandoId, setEditandoId] = useState<string | null>(null); // id em edição
   const [carregando, setCarregando] = useState(false);
   const [mensagem, setMensagem] = useState<string | null>(null);
-  // Categorias da loja (lista livre, criadas no balcão)
+  const [erroFotoProduto, setErroFotoProduto] = useState<string | null>(null);
+  const inputFotoProduto = useRef<HTMLInputElement>(null);
+  // Categorias da loja (lista livre)
   const [categorias, setCategorias] = useState<string[]>(CATEGORIAS_PADRAO);
+  const [novaCategoria, setNovaCategoria] = useState("");
 
   // Importar cardápio por foto (OCR no navegador)
   const [fotoUrl, setFotoUrl] = useState<string | null>(null); // prévia da imagem
@@ -124,6 +129,7 @@ export default function CadastrarProduto() {
       code: parseInt(form.codigo) || 0,
       description: form.descricao.trim(),
       available: form.disponivel,
+      image_url: form.foto,
       loja_id: sessao.id,
     };
 
@@ -196,12 +202,14 @@ export default function CadastrarProduto() {
 
     setMensagem(editandoId ? "Produto atualizado!" : "Produto cadastrado!");
     setEditandoId(null);
+    setErroFotoProduto(null);
+    if (inputFotoProduto.current) inputFotoProduto.current.value = "";
 
     setForm(FORM_VAZIO);
     carregar();
   }
 
-  // Preenche o formulário para editar
+  // Preenche o formulário para editar (abre inline abaixo do produto na lista)
   function editar(p: Product) {
     setEditandoId(p.id);
     setForm({
@@ -211,15 +219,90 @@ export default function CadastrarProduto() {
       codigo: String(p.code),
       descricao: p.description || "",
       disponivel: p.available !== false,
+      foto: p.image_url || null,
     });
+    setErroFotoProduto(null);
+    if (inputFotoProduto.current) inputFotoProduto.current.value = "";
     setMensagem(null);
-    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   // Cancela a edição
   function cancelar() {
     setEditandoId(null);
     setForm(FORM_VAZIO);
+    setErroFotoProduto(null);
+    if (inputFotoProduto.current) inputFotoProduto.current.value = "";
+  }
+
+  // Escolhe/troca a foto do produto no formulário (salva junto ao cadastrar/editar)
+  function escolherFotoProdutoForm(e: React.ChangeEvent<HTMLInputElement>) {
+    const arquivo = e.target.files?.[0];
+    e.target.value = "";
+    setErroFotoProduto(null);
+    if (!arquivo) return;
+    if (!arquivo.type.startsWith("image/")) {
+      setErroFotoProduto("Escolha um arquivo de imagem (JPG, PNG...).");
+      return;
+    }
+    if (arquivo.size > 1.5 * 1024 * 1024) {
+      setErroFotoProduto("Imagem muito grande. Use uma de até 1,5 MB.");
+      return;
+    }
+    const leitor = new FileReader();
+    leitor.onload = () => setForm((atual) => ({ ...atual, foto: String(leitor.result) }));
+    leitor.onerror = () => setErroFotoProduto("Não foi possível ler a imagem. Escolha outro arquivo.");
+    leitor.readAsDataURL(arquivo);
+  }
+
+  // ============================================================
+  // CATEGORIAS (adicionar/excluir) — gerenciamento movido do Balcão
+  // ============================================================
+  function adicionarCategoria() {
+    const s = getSessao();
+    const nome = novaCategoria.trim().toUpperCase();
+    if (!s) return;
+    if (!nome) {
+      setMensagem("Informe o nome da categoria.");
+      return;
+    }
+    if (categorias.some((c) => c.toUpperCase() === nome)) {
+      setMensagem("Essa categoria já existe.");
+      return;
+    }
+    const lista = [...categorias, nome];
+    try {
+      salvarCategorias(s.id, lista);
+    } catch {
+      setMensagem("Não foi possível salvar a categoria no navegador.");
+      return;
+    }
+    setCategorias(lista);
+    setNovaCategoria("");
+    setForm((atual) => ({ ...atual, categoria: nome as Categoria }));
+    setMensagem(`Categoria "${nome}" adicionada.`);
+  }
+
+  function excluirCategoria(nome: string) {
+    const s = getSessao();
+    if (!s) return;
+    const confirmou = window.confirm(
+      `Excluir a categoria "${nome}" da lista? Os produtos serão mantidos e continuarão disponíveis em TODOS.`
+    );
+    if (!confirmou) return;
+    const lista = categorias.filter((c) => c !== nome);
+    try {
+      salvarCategorias(s.id, lista);
+    } catch {
+      setMensagem("Não foi possível excluir a categoria no navegador.");
+      return;
+    }
+    setCategorias(lista);
+    setForm((atual) =>
+      atual.categoria === nome
+        ? { ...atual, categoria: (lista[0] || "TODOS") as Categoria }
+        : atual
+    );
+    setMensagem(`Categoria "${nome}" excluída.`);
   }
 
   // ============================================================
@@ -415,102 +498,206 @@ export default function CadastrarProduto() {
         </div>
       )}
 
-      {/* ================= FORMULÁRIO ================= */}
+      {/* ================= FORMULÁRIO NOVO PRODUTO / AVISO DE EDIÇÃO INLINE ================= */}
       <div className="bg-white rounded-xl p-4 mb-6">
-        <h2 className="font-bold mb-3">
-          {editandoId ? "Editar Produto" : "Novo Produto"}
-        </h2>
-        <form onSubmit={salvar} className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <div className="md:col-span-3">
-            <label className="block text-xs text-gray-400 mb-1">Nome *</label>
-            <input
-              type="text"
-              placeholder="Nome do produto"
-              value={form.nome}
-              onChange={(e) => setForm({ ...form, nome: e.target.value })}
-              className={inputClasse}
-              required
-            />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-400 mb-1">Preço (R$) *</label>
-            <input
-              type="text"
-              inputMode="decimal"
-              placeholder="Ex: 29,90"
-              value={form.preco}
-              onChange={(e) => setForm({ ...form, preco: e.target.value })}
-              className={inputClasse}
-              required
-            />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-400 mb-1">Código *</label>
-            <input
-              type="number"
-              placeholder="Ex: 13"
-              value={form.codigo}
-              onChange={(e) => setForm({ ...form, codigo: e.target.value })}
-              className={inputClasse}
-              required
-            />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-400 mb-1">Categoria</label>
-            <select
-              value={form.categoria}
-              onChange={(e) =>
-                setForm({ ...form, categoria: e.target.value as Categoria })
-              }
-              className={inputClasse}
-            >
-              {(categorias.includes(form.categoria)
-                ? categorias
-                : [...categorias, form.categoria]
-              ).map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="md:col-span-2">
-            <label className="block text-xs text-gray-400 mb-1">Descrição do cardápio digital</label>
-            <input
-              type="text"
-              placeholder="Ex: Hambúrguer artesanal, queijo e molho da casa"
-              value={form.descricao}
-              onChange={(e) => setForm({ ...form, descricao: e.target.value })}
-              className={inputClasse}
-            />
-          </div>
-          <label className="flex items-center gap-2 text-sm font-semibold md:self-end pb-2">
-            <input
-              type="checkbox"
-              checked={form.disponivel}
-              onChange={(e) => setForm({ ...form, disponivel: e.target.checked })}
-              className="h-4 w-4"
-            />
-            Disponível no cardápio digital
-          </label>
-          <div className="md:col-span-3 flex gap-2">
+        {editandoId ? (
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="font-bold">Editando produto</h2>
+              <p className="text-sm text-gray-500">
+                As opções de edição (nome, valor e foto) aparecem abaixo do produto selecionado na lista.
+              </p>
+            </div>
             <button
-              type="submit"
-              className="bg-green-600 hover:bg-green-700 font-bold px-6 py-2 rounded-lg transition"
+              type="button"
+              onClick={cancelar}
+              className="bg-gray-200 hover:bg-gray-300 text-gray-700 font-semibold px-4 py-2 rounded-lg"
             >
-              {editandoId ? "Salvar Alterações" : "Cadastrar"}
+              Cancelar edição
             </button>
-            {editandoId && (
+          </div>
+        ) : (
+          <>
+            <h2 className="font-bold mb-3">Novo Produto</h2>
+            <form onSubmit={salvar} className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div className="md:col-span-3">
+                <label className="block text-xs text-gray-400 mb-1">Nome *</label>
+                <input
+                  type="text"
+                  placeholder="Nome do produto"
+                  value={form.nome}
+                  onChange={(e) => setForm({ ...form, nome: e.target.value })}
+                  className={inputClasse}
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">Preço (R$) *</label>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="Ex: 29,90"
+                  value={form.preco}
+                  onChange={(e) => setForm({ ...form, preco: e.target.value })}
+                  className={inputClasse}
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">Código *</label>
+                <input
+                  type="number"
+                  placeholder="Ex: 13"
+                  value={form.codigo}
+                  onChange={(e) => setForm({ ...form, codigo: e.target.value })}
+                  className={inputClasse}
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">Categoria</label>
+                <select
+                  value={form.categoria}
+                  onChange={(e) =>
+                    setForm({ ...form, categoria: e.target.value as Categoria })
+                  }
+                  className={inputClasse}
+                >
+                  {(categorias.includes(form.categoria)
+                    ? categorias
+                    : [...categorias, form.categoria]
+                  ).map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="md:col-span-2">
+                <label className="block text-xs text-gray-400 mb-1">Descrição do cardápio digital</label>
+                <input
+                  type="text"
+                  placeholder="Ex: Hambúrguer artesanal, queijo e molho da casa"
+                  value={form.descricao}
+                  onChange={(e) => setForm({ ...form, descricao: e.target.value })}
+                  className={inputClasse}
+                />
+              </div>
+              <label className="flex items-center gap-2 text-sm font-semibold md:self-end pb-2">
+                <input
+                  type="checkbox"
+                  checked={form.disponivel}
+                  onChange={(e) => setForm({ ...form, disponivel: e.target.checked })}
+                  className="h-4 w-4"
+                />
+                Disponível no cardápio digital
+              </label>
+              <div className="md:col-span-3">
+                <label className="block text-xs text-gray-400 mb-1">Foto do produto</label>
+                <div className="flex items-center gap-3">
+                  {form.foto ? (
+                    <img
+                      src={form.foto}
+                      alt="Foto do produto"
+                      className="w-16 h-16 rounded-lg object-cover border border-gray-200"
+                    />
+                  ) : (
+                    <div className="w-16 h-16 rounded-lg border border-dashed border-gray-300 bg-gray-50 flex items-center justify-center text-[10px] text-gray-400 text-center px-1">
+                      Sem foto
+                    </div>
+                  )}
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => inputFotoProduto.current?.click()}
+                      className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold px-3 py-1.5 rounded-lg transition"
+                    >
+                      {form.foto ? "Trocar foto" : "Escolher foto"}
+                    </button>
+                    {form.foto && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setForm((atual) => ({ ...atual, foto: null }));
+                          setErroFotoProduto(null);
+                          if (inputFotoProduto.current) inputFotoProduto.current.value = "";
+                        }}
+                        className="bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-semibold px-3 py-1.5 rounded-lg transition"
+                      >
+                        Remover foto
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {erroFotoProduto && (
+                  <p className="text-xs text-red-600 mt-2">{erroFotoProduto}</p>
+                )}
+                <input
+                  ref={inputFotoProduto}
+                  type="file"
+                  accept="image/*"
+                  onChange={escolherFotoProdutoForm}
+                  className="hidden"
+                />
+              </div>
+              <div className="md:col-span-3 flex gap-2">
+                <button
+                  type="submit"
+                  className="bg-green-600 hover:bg-green-700 font-bold px-6 py-2 rounded-lg transition"
+                >
+                  Cadastrar
+                </button>
+              </div>
+            </form>
+          </>
+        )}
+      </div>
+
+      {/* ================= CATEGORIAS ================= */}
+      <div className="bg-white rounded-xl p-4 mb-6">
+        <h2 className="font-bold mb-1">Categorias</h2>
+        <p className="text-xs text-gray-500 mb-3">
+          Adicione ou exclua categorias usadas nos produtos e no balcão.
+        </p>
+        <div className="flex flex-wrap gap-2 mb-3">
+          {categorias.map((c) => (
+            <span
+              key={c}
+              className="inline-flex items-center gap-1 bg-gray-100 text-gray-700 rounded-full px-3 py-1 text-sm"
+            >
+              {c}
               <button
                 type="button"
-                onClick={cancelar}
-                className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-6 py-2 rounded-lg"
+                onClick={() => excluirCategoria(c)}
+                title={`Excluir categoria ${c}`}
+                aria-label={`Excluir categoria ${c}`}
+                className="text-gray-500 hover:text-red-600 font-bold leading-none"
               >
-                Cancelar
+                ×
               </button>
-            )}
-          </div>
-        </form>
+            </span>
+          ))}
+          {categorias.length === 0 && (
+            <span className="text-sm text-gray-400">Nenhuma categoria cadastrada.</span>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            type="text"
+            value={novaCategoria}
+            onChange={(e) => setNovaCategoria(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), adicionarCategoria())}
+            placeholder="Nova categoria"
+            className="bg-gray-100 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 w-48"
+          />
+          <button
+            type="button"
+            onClick={adicionarCategoria}
+            className="bg-green-600 hover:bg-green-700 text-white font-bold px-4 py-2 rounded-lg transition"
+          >
+            Adicionar categoria
+          </button>
+        </div>
       </div>
 
       {/* ================= IMPORTAR CARDÁPIO POR FOTO ================= */}
@@ -713,52 +900,207 @@ export default function CadastrarProduto() {
               </tr>
             )}
             {produtos.map((p) => (
-              <tr key={p.id} className="hover:bg-gray-50">
-                <td className="px-4 py-2 font-mono">{p.code}</td>
-                <td className="px-4 py-2 font-medium">{p.name}</td>
-                <td className="px-4 py-2">
-                  <span className="text-xs bg-gray-100 text-gray-700 px-2 py-0.5 rounded">
-                    {p.category}
-                  </span>
-                </td>
-                <td className="px-4 py-2 text-right">
-                  {formatarMoeda(Number(p.price))}
-                </td>
-                <td className="px-4 py-2 text-center whitespace-nowrap">
-                  <button
-                    onClick={async () => {
-                      if (!supabase) return;
-                      const novoDisponivel = p.available === false;
-                      const { error } = await supabase.from("products").update({ available: novoDisponivel }).eq("id", p.id);
-                      if (error) {
-                        setMensagem(
-                          mensagemColunaProdutoAusente(error.message) ||
-                            "Erro ao atualizar disponibilidade: " + error.message
-                        );
-                      }
-                      else {
-                        setMensagem(novoDisponivel ? "Produto disponível no cardápio!" : "Produto pausado no cardápio!");
-                        carregar();
-                      }
-                    }}
-                    className={`font-semibold px-2 ${p.available === false ? "text-green-600 hover:text-green-700" : "text-orange-600 hover:text-orange-700"}`}
-                  >
-                    {p.available === false ? "Ativar" : "Pausar"}
-                  </button>
-                  <button
-                    onClick={() => editar(p)}
-                    className="text-blue-600 hover:text-blue-700 font-semibold px-2"
-                  >
-                    Editar
-                  </button>
-                  <button
-                    onClick={() => excluir(p)}
-                    className="text-red-500 hover:text-red-600 font-semibold px-2"
-                  >
-                    Excluir
-                  </button>
-                </td>
-              </tr>
+              <Fragment key={p.id}>
+                <tr className="hover:bg-gray-50">
+                  <td className="px-4 py-2 font-mono">{p.code}</td>
+                  <td className="px-4 py-2 font-medium">{p.name}</td>
+                  <td className="px-4 py-2">
+                    <span className="text-xs bg-gray-100 text-gray-700 px-2 py-0.5 rounded">
+                      {p.category}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2 text-right">
+                    {formatarMoeda(Number(p.price))}
+                  </td>
+                  <td className="px-4 py-2 text-center whitespace-nowrap">
+                    <button
+                      onClick={async () => {
+                        if (!supabase) return;
+                        const novoDisponivel = p.available === false;
+                        const { error } = await supabase
+                          .from("products")
+                          .update({ available: novoDisponivel })
+                          .eq("id", p.id);
+                        if (error) {
+                          setMensagem(
+                            mensagemColunaProdutoAusente(error.message) ||
+                              "Erro ao atualizar disponibilidade: " + error.message
+                          );
+                        } else {
+                          setMensagem(
+                            novoDisponivel
+                              ? "Produto disponível no cardápio!"
+                              : "Produto pausado no cardápio!"
+                          );
+                          carregar();
+                        }
+                      }}
+                      className={`font-semibold px-2 ${p.available === false ? "text-green-600 hover:text-green-700" : "text-orange-600 hover:text-orange-700"}`}
+                    >
+                      {p.available === false ? "Ativar" : "Pausar"}
+                    </button>
+                    <button
+                      onClick={() => editar(p)}
+                      className="text-blue-600 hover:text-blue-700 font-semibold px-2"
+                    >
+                      Editar
+                    </button>
+                    <button
+                      onClick={() => excluir(p)}
+                      className="text-red-500 hover:text-red-600 font-semibold px-2"
+                    >
+                      Excluir
+                    </button>
+                  </td>
+                </tr>
+                {editandoId === p.id && (
+                  <tr className="bg-blue-50/40">
+                    <td colSpan={5} className="px-4 py-3">
+                      <form onSubmit={salvar} className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <div className="md:col-span-3 flex items-center justify-between gap-2">
+                          <h3 className="font-bold text-sm">Editar produto</h3>
+                          <span className="text-xs text-gray-500">Altere nome, valor e foto abaixo</span>
+                        </div>
+                        <div className="md:col-span-3">
+                          <label className="block text-xs text-gray-400 mb-1">Nome *</label>
+                          <input
+                            type="text"
+                            placeholder="Nome do produto"
+                            value={form.nome}
+                            onChange={(e) => setForm({ ...form, nome: e.target.value })}
+                            className={inputClasse}
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-400 mb-1">Preço (R$) *</label>
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            placeholder="Ex: 29,90"
+                            value={form.preco}
+                            onChange={(e) => setForm({ ...form, preco: e.target.value })}
+                            className={inputClasse}
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-400 mb-1">Código *</label>
+                          <input
+                            type="number"
+                            placeholder="Ex: 13"
+                            value={form.codigo}
+                            onChange={(e) => setForm({ ...form, codigo: e.target.value })}
+                            className={inputClasse}
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-400 mb-1">Categoria</label>
+                          <select
+                            value={form.categoria}
+                            onChange={(e) =>
+                              setForm({ ...form, categoria: e.target.value as Categoria })
+                            }
+                            className={inputClasse}
+                          >
+                            {(categorias.includes(form.categoria)
+                              ? categorias
+                              : [...categorias, form.categoria]
+                            ).map((c) => (
+                              <option key={c} value={c}>
+                                {c}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="md:col-span-2">
+                          <label className="block text-xs text-gray-400 mb-1">Descrição do cardápio digital</label>
+                          <input
+                            type="text"
+                            placeholder="Ex: Hambúrguer artesanal, queijo e molho da casa"
+                            value={form.descricao}
+                            onChange={(e) => setForm({ ...form, descricao: e.target.value })}
+                            className={inputClasse}
+                          />
+                        </div>
+                        <label className="flex items-center gap-2 text-sm font-semibold md:self-end pb-2">
+                          <input
+                            type="checkbox"
+                            checked={form.disponivel}
+                            onChange={(e) => setForm({ ...form, disponivel: e.target.checked })}
+                            className="h-4 w-4"
+                          />
+                          Disponível no cardápio digital
+                        </label>
+                        <div className="md:col-span-3">
+                          <label className="block text-xs text-gray-400 mb-1">Foto do produto</label>
+                          <div className="flex items-center gap-3">
+                            {form.foto ? (
+                              <img
+                                src={form.foto}
+                                alt="Foto do produto"
+                                className="w-16 h-16 rounded-lg object-cover border border-gray-200"
+                              />
+                            ) : (
+                              <div className="w-16 h-16 rounded-lg border border-dashed border-gray-300 bg-gray-50 flex items-center justify-center text-[10px] text-gray-400 text-center px-1">
+                                Sem foto
+                              </div>
+                            )}
+                            <div className="flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                onClick={() => inputFotoProduto.current?.click()}
+                                className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold px-3 py-1.5 rounded-lg transition"
+                              >
+                                {form.foto ? "Trocar foto" : "Escolher foto"}
+                              </button>
+                              {form.foto && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setForm((atual) => ({ ...atual, foto: null }));
+                                    setErroFotoProduto(null);
+                                    if (inputFotoProduto.current) inputFotoProduto.current.value = "";
+                                  }}
+                                  className="bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-semibold px-3 py-1.5 rounded-lg transition"
+                                >
+                                  Remover foto
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                          {erroFotoProduto && (
+                            <p className="text-xs text-red-600 mt-2">{erroFotoProduto}</p>
+                          )}
+                          <input
+                            ref={inputFotoProduto}
+                            type="file"
+                            accept="image/*"
+                            onChange={escolherFotoProdutoForm}
+                            className="hidden"
+                          />
+                        </div>
+                        <div className="md:col-span-3 flex gap-2">
+                          <button
+                            type="submit"
+                            className="bg-green-600 hover:bg-green-700 font-bold px-6 py-2 rounded-lg transition"
+                          >
+                            Salvar Alterações
+                          </button>
+                          <button
+                            type="button"
+                            onClick={cancelar}
+                            className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-6 py-2 rounded-lg"
+                          >
+                            Cancelar
+                          </button>
+                        </div>
+                      </form>
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
             ))}
           </tbody>
         </table>

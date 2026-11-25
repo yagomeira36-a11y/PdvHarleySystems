@@ -1,5 +1,6 @@
 import { getSessao, getSupabase } from "./supabase";
 import type { Configuracao, Order, OrderItem } from "./supabase";
+import { lerCacheOffline } from "./offline-pdv";
 
 export type ConfigImpressora = {
   impressoraCliente: string;
@@ -227,5 +228,35 @@ export async function carregarDadosImpressao(pedidoId: string): Promise<DadosImp
     modeloComanda: normalizarModeloComanda(empresa.modelo_comanda),
     tempoPreparo: `${tempoMin} a ${tempoMax} min`,
     itens: itens.map((item) => ({ nome: item.product_id ? nomes.get(item.product_id) || "Produto removido" : "Produto removido", quantidade: item.qty, preco: Number(item.price), observacao: item.observacao })),
+  };
+}
+
+export async function montarDadosImpressaoLocal(args: {
+  pedido: Order;
+  itens: ItemImpressao[];
+  empresa?: Pick<Configuracao, "nome_empresa" | "cnpj" | "telefone" | "endereco" | "modelo_comanda"> | null;
+  tempoPreparo?: string;
+  teste?: boolean;
+}): Promise<DadosImpressao> {
+  const sessao = getSessao();
+  if (!sessao) throw new Error("Sessão da loja não encontrada.");
+  let empresa = args.empresa ?? null;
+  if (!empresa) {
+    try {
+      const cache = await lerCacheOffline<Configuracao>(sessao.id, "configuracoes");
+      if (cache) empresa = { nome_empresa: cache.nome_empresa, cnpj: cache.cnpj ?? null, telefone: cache.telefone ?? null, endereco: cache.endereco ?? null, modelo_comanda: cache.modelo_comanda ?? "modelo1" };
+    } catch { /* usa fallback */ }
+  }
+  if (!empresa) {
+    empresa = { nome_empresa: sessao.nome_loja, cnpj: null, telefone: null, endereco: null, modelo_comanda: "modelo1" };
+  }
+  if (!args.itens.length) throw new Error("O pedido não possui itens. Confira os dados antes de imprimir.");
+  return {
+    pedido: args.pedido,
+    empresa,
+    modeloComanda: normalizarModeloComanda(empresa.modelo_comanda),
+    tempoPreparo: args.tempoPreparo || "35 a 50 min",
+    itens: args.itens,
+    teste: args.teste,
   };
 }

@@ -1,11 +1,11 @@
-"use client";
+﻿"use client";
 
 // ============================================================
 // MODAL DE EDIÇÃO DE PEDIDO (compartilhado)
 // Usado em "Pedido Finalizado" e na lista de pedidos do
 // expediente (caixa). Permite mudar o nome do cliente, alterar
 // quantidades, remover e adicionar itens. Ao salvar, atualiza
-// o total e os itens no banco.
+// o total e os itens no banco (ou localmente para pedidos offline).
 // ============================================================
 import { useState } from "react";
 import {
@@ -17,6 +17,12 @@ import {
   Product,
 } from "@/lib/supabase";
 import { caixaEstaAberto, MENSAGEM_CAIXA_FECHADO } from "@/lib/caixa";
+import {
+  atualizarPedidoOffline,
+  enfileirarUpdateOffline,
+  type OfflineOrderItem,
+  type OfflineOrderRecord,
+} from "@/lib/offline-pdv";
 
 // Item do pedido dentro do modal de edição
 export type ItemEdit = {
@@ -26,12 +32,14 @@ export type ItemEdit = {
   qty: number;
   price: number;
   cost: number;
+  observacao?: string | null;
 };
 
 type Props = {
   pedido: Order;
   itensIniciais: ItemEdit[];
   produtos: Product[];
+  offlineRecord?: OfflineOrderRecord | null;
   onClose: () => void;
   // Chamado após salvar com sucesso (texto para o toast)
   onSaved: (texto: string) => void;
@@ -41,6 +49,7 @@ export default function EditarPedidoModal({
   pedido,
   itensIniciais,
   produtos,
+  offlineRecord,
   onClose,
   onSaved,
 }: Props) {
@@ -87,6 +96,7 @@ export default function EditarPedidoModal({
           qty: 1,
           price: Number(pr.price),
           cost: Number(pr.cost ?? 0),
+          observacao: null,
         },
       ]);
     }
@@ -99,57 +109,129 @@ export default function EditarPedidoModal({
     (pedido.type === "delivery" ? Number(pedido.delivery_fee || 0) : 0);
 
   // ============================================================
-  // SALVAR EDIÇÃO DO PEDIDO (atualiza total e itens no banco)
+  // SALVAR EDIÇÃO DO PEDIDO (atualiza total e itens no banco/local)
   // ============================================================
   async function salvarEdicaoPedido() {
     const sessao = getSessao();
-    if (!supabase || !sessao) return;
+    if (!sessao) return;
     if (!caixaEstaAberto(sessao.id)) {
       setMensagem(MENSAGEM_CAIXA_FECHADO);
       return;
     }
     setSalvando(true);
     setMensagem(null);
-    const { error: e1 } = await supabase
-      .from("orders")
-      .update({
-        total: totalEdicao,
-        customer_name: editNome.trim() || null,
-      })
-      .eq("id", pedido.id);
-    if (e1) {
-      setMensagem("Erro ao salvar pedido: " + e1.message);
-      setSalvando(false);
-      return;
-    }
-    const { error: e2 } = await supabase
-      .from("order_items")
-      .delete()
-      .eq("order_id", pedido.id);
-    if (e2) {
-      setMensagem("Erro ao atualizar itens: " + e2.message);
-      setSalvando(false);
-      return;
-    }
-    if (editItens.length > 0) {
-      const { error: e3 } = await supabase.from("order_items").insert(
-        editItens.map((i) => ({
-          order_id: pedido.id,
-          product_id: i.product_id,
+    try {
+      // Pedido offline/local: salva no armazenamento offline (sem depender de Supabase)
+      if (offlineRecord) {
+        const orderId = offlineRecord.id;
+        const itensOffline: OfflineOrderItem[] = editItens.map((i, idx) => {
+          const original = offlineRecord.itens.find((o) => o.id === i.key);
+          return {
+            id: original?.id || `item-${orderId}-${idx}-${Date.now()}`,
+            order_id: orderId,
+            product_id: i.product_id || "",
+            qty: i.qty,
+            price: i.price,
+            cost: i.cost,
+            observacao: i.observacao ?? original?.observacao ?? null,
+            loja_id: sessao.id,
+          };
+        });
+        const itensSnapshot = editItens.map((i) => ({
+          product_id: i.product_id || "",
+          name: i.nome,
           qty: i.qty,
           price: i.price,
-          cost: i.cost,
-          loja_id: sessao.id,
-        }))
-      );
-      if (e3) {
-        setMensagem("Erro ao salvar itens: " + e3.message);
-        setSalvando(false);
+          observacao: i.observacao ?? null,
+        }));
+        await atualizarPedidoOffline(orderId, (atual) => ({
+          ...atual,
+          itens: itensOffline,
+          pedido: {
+            ...atual.pedido,
+            total: totalEdicao,
+            customer_name: editNome.trim() || null,
+            items: itensSnapshot,
+            numero_exibicao: atual.numeroExibicao || atual.pedido.numero_exibicao,
+          },
+        }));
+        // Se já sincronizado e online, tenta refletir no remoto (best-effort); senão fila não suporta edição completa
+        if (offlineRecord.sincronizado && supabase && typeof navigator !== "undefined" && navigator.onLine) {
+          try {
+            const { error: e1 } = await supabase
+              .from("orders")
+              .update({ total: totalEdicao, customer_name: editNome.trim() || null })
+              .eq("id", orderId)
+              .eq("loja_id", sessao.id);
+            if (!e1) {
+              const { error: e2 } = await supabase.from("order_items").delete().eq("order_id", orderId);
+              if (!e2 && itensOffline.length > 0) {
+                await supabase.from("order_items").insert(
+                  itensOffline.map((i) => ({
+                    order_id: orderId,
+                    product_id: i.product_id || null,
+                    qty: i.qty,
+                    price: i.price,
+                    cost: i.cost,
+                    observacao: i.observacao ?? null,
+                    loja_id: sessao.id,
+                  }))
+                );
+              }
+            }
+          } catch {
+            // mantém edição local; sync futuro/fluxo atual não duplica base
+          }
+        }
+        onSaved(`${rotuloPedido({ ...pedido, numero_exibicao: offlineRecord.numeroExibicao || pedido.numero_exibicao } as Order)} editado offline!`);
         return;
       }
+
+      if (!supabase) {
+        setMensagem("Sem conexão com o servidor. Não foi possível editar este pedido agora.");
+        return;
+      }
+      const { error: e1 } = await supabase
+        .from("orders")
+        .update({
+          total: totalEdicao,
+          customer_name: editNome.trim() || null,
+        })
+        .eq("id", pedido.id);
+      if (e1) {
+        setMensagem("Erro ao salvar pedido: " + e1.message);
+        return;
+      }
+      const { error: e2 } = await supabase
+        .from("order_items")
+        .delete()
+        .eq("order_id", pedido.id);
+      if (e2) {
+        setMensagem("Erro ao atualizar itens: " + e2.message);
+        return;
+      }
+      if (editItens.length > 0) {
+        const { error: e3 } = await supabase.from("order_items").insert(
+          editItens.map((i) => ({
+            order_id: pedido.id,
+            product_id: i.product_id,
+            qty: i.qty,
+            price: i.price,
+            cost: i.cost,
+            loja_id: sessao.id,
+          }))
+        );
+        if (e3) {
+          setMensagem("Erro ao salvar itens: " + e3.message);
+          return;
+        }
+      }
+      onSaved(`${rotuloPedido(pedido)} editado!`);
+    } catch (error) {
+      setMensagem("Erro ao salvar pedido: " + (error instanceof Error ? error.message : String(error)));
+    } finally {
+      setSalvando(false);
     }
-    setSalvando(false);
-    onSaved(`${rotuloPedido(pedido)} editado!`);
   }
 
   return (
@@ -157,7 +239,7 @@ export default function EditarPedidoModal({
       <div className="bg-white rounded-2xl w-full max-w-lg max-h-[85vh] overflow-y-auto p-5 shadow-xl">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-extrabold">
-            Editar {rotuloPedido(pedido)}
+            Editar {rotuloPedido({ ...pedido, numero_exibicao: offlineRecord?.numeroExibicao || pedido.numero_exibicao } as Order)}
           </h2>
           <button
             onClick={onClose}

@@ -67,12 +67,19 @@ export type Order = {
     price: number;
     observacao: string | null;
   }>;
+  numero_exibicao?: string | null; // rótulo local (ex.: OFF-1) para pedidos offline
   created_at: string;
 };
 
 export function rotuloPedido(
-  pedido: Pick<Order, "numero_pedido"> & { customer_name?: string | null }
+  pedido: Pick<Order, "numero_pedido" | "numero_exibicao"> & { customer_name?: string | null }
 ): string {
+  const exibicao = (pedido.numero_exibicao ?? "").trim();
+  if (exibicao) {
+    const base = /^pedido\b/i.test(exibicao) ? exibicao : `Pedido ${exibicao}`;
+    const nome = (pedido.customer_name ?? "").trim();
+    return nome ? `${base} - ${nome}` : base;
+  }
   const numero = Number(pedido.numero_pedido);
   const base =
     Number.isSafeInteger(numero) && numero > 0

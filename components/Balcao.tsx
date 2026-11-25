@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 // ============================================================
 // TELA BALCÃO (PDV principal)
@@ -32,13 +32,13 @@ import { hojeISO } from "@/lib/fiado";
 import { lerPagamentos } from "@/lib/pagamentos";
 import type { Order } from "@/lib/supabase";
 import { imprimirPedidoAutomatico } from "@/lib/qz";
+import { montarDadosImpressaoLocal } from "@/lib/impressao";
 import ImpressaoPedido from "./ImpressaoPedido";
 import { caixaEstaAberto, MENSAGEM_CAIXA_FECHADO } from "@/lib/caixa";
 import {
   CATEGORIAS_PADRAO,
   inicializarCategorias,
   lerCategorias,
-  salvarCategorias,
 } from "@/lib/categorias";
 import {
   Comanda,
@@ -60,10 +60,12 @@ import {
   zonasOrdenadas,
 } from "@/lib/zonas";
 import {
+  atualizarPedidoOffline,
   contarPedidosOffline,
   guardarCacheOffline,
   guardarPedidoOffline,
   lerCacheOffline,
+  proximoNumeroExibicaoOffline,
   type OfflineOrderRecord,
 } from "@/lib/offline-pdv";
 
@@ -237,10 +239,8 @@ export default function Balcao({ aoPedidoCriado }: Props) {
   // Formas de pagamento (lista da loja + escolhida na venda)
   const [pagamentos, setPagamentos] = useState<string[]>([]);
 
-  // Categorias de produto (lista da loja, com opção de criar novas)
+  // Categorias de produto (lista da loja)
   const [categorias, setCategorias] = useState<string[]>(CATEGORIAS_PADRAO);
-  const [novaCategoria, setNovaCategoria] = useState(""); // texto da categoria nova
-  const [adicionandoCategoria, setAdicionandoCategoria] = useState(false); // mostra o campo "+"
 
   // ============================================================
   // CARREGAR AS COMANDAS SALVAS (rascunhos) DO NAVEGADOR
@@ -503,52 +503,6 @@ export default function Balcao({ aoPedidoCriado }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pagamentos, ativaId, carregado]);
 
-  // ============================================================
-  // CRIAR CATEGORIA NOVA (ex: "molhos") direto nas pills do balcão
-  // ============================================================
-  function confirmarNovaCategoria() {
-    const s = getSessao();
-    const nome = novaCategoria.trim().toUpperCase();
-    if (!s) return;
-    if (!nome || nome === "TODOS") {
-      aoPedidoCriado("Informe uma categoria diferente de TODOS.", "erro");
-      return;
-    }
-    if (categorias.some((c) => c.toUpperCase() === nome)) {
-      aoPedidoCriado("Essa categoria já existe.", "erro");
-      return;
-    }
-    const lista = [...categorias, nome];
-    try {
-      salvarCategorias(s.id, lista);
-    } catch {
-      aoPedidoCriado("Não foi possível salvar a categoria no navegador.", "erro");
-      return;
-    }
-    setCategorias(lista);
-    setCategoria(nome);
-    setAdicionandoCategoria(false);
-    setNovaCategoria("");
-  }
-
-  function excluirCategoria(nome: string) {
-    const s = getSessao();
-    if (!s) return;
-    const confirmou = window.confirm(
-      `Excluir a categoria "${nome}" da lista? Os produtos serão mantidos e continuarão disponíveis em TODOS.`
-    );
-    if (!confirmou) return;
-
-    const lista = categorias.filter((categoriaSalva) => categoriaSalva !== nome);
-    try {
-      salvarCategorias(s.id, lista);
-    } catch {
-      aoPedidoCriado("Não foi possível excluir a categoria no navegador.", "erro");
-      return;
-    }
-    setCategorias(lista);
-    if (categoria === nome) setCategoria("TODOS");
-  }
 
   // ============================================================
   // FILTRO: categoria + busca (por nome ou código)
@@ -607,6 +561,47 @@ export default function Balcao({ aoPedidoCriado }: Props) {
   const carrinho = comanda?.carrinho ?? [];
   const total = carrinho.reduce((soma, i) => soma + Number(i.product.price) * i.qty, 0);
 
+  function chaveTaxaEntregaCache(lojaId: string) {
+    return `pdv_taxa_entrega_${lojaId}`;
+  }
+  function lerTaxaEntregaCache(lojaId: string): number | null {
+    if (typeof window === "undefined") return null;
+    try {
+      const bruto = window.localStorage.getItem(chaveTaxaEntregaCache(lojaId));
+      if (bruto == null) return null;
+      const n = Number(bruto);
+      return Number.isFinite(n) && n >= 0 ? n : null;
+    } catch { return null; }
+  }
+  function salvarTaxaEntregaCache(lojaId: string, taxa: number) {
+    if (typeof window === "undefined") return;
+    try { window.localStorage.setItem(chaveTaxaEntregaCache(lojaId), String(taxa)); } catch { /* ignore */ }
+  }
+  function parseTaxaEntrega(valor: string | null | undefined): number | null {
+    const n = Number(String(valor ?? "").replace(",", ".").trim());
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  }
+  function ehErroDeRede(error: unknown): boolean {
+    if (typeof navigator !== "undefined" && navigator.onLine === false) return true;
+    const msg =
+      typeof error === "string"
+        ? error
+        : error && typeof (error as { message?: unknown }).message === "string"
+          ? String((error as { message: string }).message)
+          : "";
+    const texto = msg.toLowerCase();
+    if (
+      texto.includes("failed to fetch") ||
+      texto.includes("networkerror") ||
+      texto.includes("network request failed") ||
+      texto.includes("load failed") ||
+      texto.includes("fetch failed") ||
+      texto.includes("err_internet_disconnected") ||
+      texto.includes("offline")
+    ) return true;
+    return error instanceof TypeError;
+  }
+
   async function guardarComandaOffline(dados: DadosPedidoOffline): Promise<Order> {
     if (!comanda) throw new Error("Nenhuma comanda ativa para salvar offline.");
     const sessao = getSessao();
@@ -614,6 +609,7 @@ export default function Balcao({ aoPedidoCriado }: Props) {
 
     const id = crypto.randomUUID();
     const criadoEm = new Date().toISOString();
+    const numeroExibicao = proximoNumeroExibicaoOffline(sessao.id);
     const itens = comanda.carrinho.map((item) => ({
       id: crypto.randomUUID(),
       order_id: id,
@@ -628,7 +624,7 @@ export default function Balcao({ aoPedidoCriado }: Props) {
       id,
       total: dados.total,
       type: dados.type,
-      status: "pendente",
+      status: "em_preparo",
       customer_name: dados.customer_name,
       address: dados.address,
       complemento: dados.complemento ?? null,
@@ -637,6 +633,7 @@ export default function Balcao({ aoPedidoCriado }: Props) {
       mesa_numero: dados.mesa_numero ?? null,
       forma_pagamento: comanda.formaPagamento,
       numero_pedido: null,
+      numero_exibicao: numeroExibicao,
       created_at: criadoEm,
       items: comanda.carrinho.map((item) => ({
         product_id: item.product.id,
@@ -649,9 +646,12 @@ export default function Balcao({ aoPedidoCriado }: Props) {
     const record: OfflineOrderRecord = {
       id,
       lojaId: sessao.id,
+      numeroExibicao,
       pedido,
       itens,
       criadoEm,
+      statusLocal: "em_preparo",
+      sincronizado: false,
     };
 
     if (dados.type === "delivery") {
@@ -694,11 +694,10 @@ export default function Balcao({ aoPedidoCriado }: Props) {
     return pedido;
   }
 
-  async function salvarOfflineSeDesconectado(
+  async function salvarPedidoOfflineAgora(
     dados: DadosPedidoOffline,
     mostrarErro: (mensagem: string) => void
   ): Promise<boolean> {
-    if (navigator.onLine) return false;
     if (!comanda) {
       const mensagem = "Nenhuma comanda ativa para salvar offline.";
       mostrarErro(mensagem);
@@ -706,20 +705,46 @@ export default function Balcao({ aoPedidoCriado }: Props) {
       return true;
     }
     const comandaAtual = comanda;
+    const itensImpressao = comandaAtual.carrinho.map((item) => ({
+      nome: item.product.name,
+      quantidade: item.qty,
+      preco: Number(item.product.price),
+      observacao: item.observacao || null,
+    }));
     setEnviando(true);
     try {
       const pedido = await guardarComandaOffline(dados);
       retirarComanda(comandaAtual.id);
-      aoPedidoCriado(
-        `Pedido offline ${pedido.id.slice(0, 8)} salvo neste dispositivo. Será sincronizado quando a internet voltar.`,
-        "ok"
+      mostrarErro("");
+      const resultado = await imprimirPedidoAutomatico(
+        pedido,
+        await montarDadosImpressaoLocal({ pedido, itens: itensImpressao })
       );
+      await atualizarPedidoOffline(pedido.id, (record) => ({ ...record, falhaImpressao: resultado.erro }));
+      setFalhaImpressao(resultado.erro ? { pedido, mensagem: resultado.mensagem } : null);
+      const texto = resultado.erro
+        ? `${rotuloPedido(pedido)} salvo offline - será sincronizado. Impressão pendente: ${resultado.mensagem}`
+        : `${rotuloPedido(pedido)} salvo offline - será sincronizado`;
+      aoPedidoCriado(texto, resultado.erro ? "erro" : "ok");
+      router.push("/pdv?aba=kds");
     } catch (error) {
       const mensagem = error instanceof Error ? error.message : "Não foi possível salvar o pedido offline.";
       mostrarErro(mensagem);
       aoPedidoCriado(mensagem, "erro");
+    } finally {
+      setEnviando(false);
     }
     return true;
+  }
+
+  async function salvarOfflineSeDesconectado(
+    dados: DadosPedidoOffline,
+    mostrarErro: (mensagem: string) => void
+  ): Promise<boolean> {
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      return salvarPedidoOfflineAgora(dados, mostrarErro);
+    }
+    return false;
   }
 
   // ============================================================
@@ -802,7 +827,7 @@ export default function Balcao({ aoPedidoCriado }: Props) {
   // CONFIRMAR PEDIDO DELIVERY (telefone + endereço + taxa + motoboy)
   // ============================================================
   async function confirmarDelivery() {
-    if (!supabase || enviando || !comanda) return;
+    if (enviando || !comanda) return;
     const sessao = getSessao();
     if (!sessao) return;
     if (!caixaEstaAberto(sessao.id)) {
@@ -828,30 +853,26 @@ export default function Balcao({ aoPedidoCriado }: Props) {
       setErroForm("Selecione um motoboy para a entrega.");
       return;
     }
-    if (erroZonas) {
-      setErroForm(erroZonas);
+    const offline = typeof navigator !== "undefined" && navigator.onLine === false;
+    const taxaManual = parseTaxaEntrega(comanda.taxa);
+    const taxaCache = lerTaxaEntregaCache(sessao.id);
+    const taxaNum = zonaAtual?.taxa ?? taxaManual ?? taxaCache ?? (Number.isFinite(Number(comanda.taxa)) ? Number(comanda.taxa) : null);
+    if (taxaNum == null || !Number.isFinite(taxaNum) || taxaNum < 0) {
+      if (offline) {
+        setErroForm("Informe a taxa de entrega manualmente para continuar.");
+      } else if (erroZonas) {
+        setErroForm(erroZonas);
+      } else if (!zonasCfg.zonas.some((zona) => zona.ativo) && taxaNum == null) {
+        setErroForm("Informe a taxa de entrega para continuar.");
+      } else if (comanda.distanciaKm == null) {
+        setErroForm('Calcule a entrega pelo endereço (botão "Calcular entrega") ou informe a taxa manualmente para continuar.');
+      } else {
+        setErroForm("Informe a taxa de entrega para continuar.");
+      }
       return;
     }
-    if (!zonasCfg.zonas.some((zona) => zona.ativo)) {
-      setErroForm("Cadastre uma zona de entrega ativa em Configurações → Entrega por Zonas.");
-      return;
-    }
-    if (comanda.distanciaKm == null) {
-      setErroForm(
-        'Calcule a entrega pelo endereço (botão "Calcular entrega") para definir a zona e a taxa.'
-      );
-      return;
-    }
-    if (foraDeArea || !zonaAtual) {
-      setErroForm(
-        `O endereço está fora da área de entrega (${comanda.distanciaKm.toFixed(
-          1
-        )} km). Não entregamos nesse endereço.`
-      );
-      return;
-    }
-    const taxaNum = zonaAtual.taxa;
     const totalComTaxa = total + taxaNum;
+    salvarTaxaEntregaCache(sessao.id, taxaNum);
 
     if (await salvarOfflineSeDesconectado({
       type: "delivery",
@@ -863,6 +884,21 @@ export default function Balcao({ aoPedidoCriado }: Props) {
       delivery_fee: taxaNum,
       motoboyId: comanda.motoboyId,
     }, setErroForm)) return;
+
+    if (!supabase) {
+      // Sem conexão com o servidor: salvar offline
+      await salvarPedidoOfflineAgora({
+        type: "delivery",
+        total: totalComTaxa,
+        customer_name: comanda.cliente.trim(),
+        address: comanda.endereco.trim(),
+        complemento: comanda.complemento.trim() || null,
+        telefone: telNormalizado,
+        delivery_fee: taxaNum,
+        motoboyId: comanda.motoboyId,
+      }, setErroForm);
+      return;
+    }
 
     setEnviando(true);
     setErroForm(null);
@@ -963,15 +999,48 @@ export default function Balcao({ aoPedidoCriado }: Props) {
   // ============================================================
   async function calcularEntrega() {
     if (!comanda) return;
+    const sessao = getSessao();
+    const lojaId = sessao?.id || "";
+    const taxaManual = parseTaxaEntrega(comanda.taxa);
+    const taxaCache = lojaId ? lerTaxaEntregaCache(lojaId) : null;
+    const taxaFallback = taxaManual ?? taxaCache;
+
+    // Offline ou pedido local: não fazer fetch; usar taxa em cache ou manual
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      if (taxaFallback != null) {
+        atualizar({ taxa: String(taxaFallback) });
+        setResultadoEntrega({
+          ok: true,
+          texto: `Taxa manual - offline: ${formatarMoeda(taxaFallback)}.`,
+        });
+      } else {
+        setResultadoEntrega({
+          ok: false,
+          texto: "Sem internet. Informe a taxa de entrega manualmente para continuar.",
+        });
+      }
+      return;
+    }
+
     if (erroZonas) {
-      setResultadoEntrega({ ok: false, texto: erroZonas });
+      if (taxaFallback != null) {
+        atualizar({ taxa: String(taxaFallback) });
+        setResultadoEntrega({ ok: true, texto: `Usando taxa manual/cache: ${formatarMoeda(taxaFallback)}.` });
+      } else {
+        setResultadoEntrega({ ok: false, texto: erroZonas });
+      }
       return;
     }
     if (!zonasCfg.zonas.some((zona) => zona.ativo)) {
-      setResultadoEntrega({
-        ok: false,
-        texto: "Nenhuma zona ativa cadastrada. Configure em Configurações → Entrega por Zonas.",
-      });
+      if (taxaFallback != null) {
+        atualizar({ taxa: String(taxaFallback) });
+        setResultadoEntrega({ ok: true, texto: `Usando taxa manual/cache: ${formatarMoeda(taxaFallback)}.` });
+      } else {
+        setResultadoEntrega({
+          ok: false,
+          texto: "Nenhuma zona ativa cadastrada. Configure em Configurações → Entrega por Zonas ou informe a taxa manualmente.",
+        });
+      }
       return;
     }
     const enderecoCompleto = [comanda.endereco, comanda.complemento]
@@ -979,10 +1048,15 @@ export default function Balcao({ aoPedidoCriado }: Props) {
       .join(", ")
       .trim();
     if (enderecoCompleto.length < 4) {
-      setResultadoEntrega({
-        ok: false,
-        texto: "Informe a rua e o número do cliente para calcular.",
-      });
+      if (taxaFallback != null) {
+        atualizar({ taxa: String(taxaFallback) });
+        setResultadoEntrega({ ok: true, texto: `Usando taxa manual/cache: ${formatarMoeda(taxaFallback)}.` });
+      } else {
+        setResultadoEntrega({
+          ok: false,
+          texto: "Informe a rua e o número do cliente para calcular.",
+        });
+      }
       return;
     }
     setErroForm(null);
@@ -995,28 +1069,38 @@ export default function Balcao({ aoPedidoCriado }: Props) {
         lng: zonasCfg.lng,
       });
       if (!achado) {
-        setResultadoEntrega({
-          ok: false,
-          texto:
-            "Não encontramos esse endereço. Confira rua, número, bairro e cidade.",
-        });
+        if (taxaFallback != null) {
+          atualizar({ taxa: String(taxaFallback) });
+          setResultadoEntrega({ ok: true, texto: `Endereço não localizado. Usando taxa manual/cache: ${formatarMoeda(taxaFallback)}.` });
+        } else {
+          setResultadoEntrega({
+            ok: false,
+            texto:
+              "Não encontramos esse endereço. Confira rua, número, bairro e cidade ou informe a taxa manualmente.",
+          });
+        }
         return;
       }
       // Distância da loja até o cliente
       const dist = distanciaKm(zonasCfg.lat, zonasCfg.lng, achado.lat, achado.lng);
       const zona = zonaParaDistancia(dist, zonasCfg.zonas);
       if (!zona) {
-        atualizar({ distanciaKm: dist, taxa: "" });
-        setResultadoEntrega({
-          ok: false,
-          texto: `Cliente a ${dist.toFixed(1)} km — fora da área de entrega.`,
-        });
+        atualizar({ distanciaKm: dist, taxa: taxaFallback != null ? String(taxaFallback) : "" });
+        if (taxaFallback != null) {
+          setResultadoEntrega({ ok: true, texto: `Fora da área de entrega. Usando taxa manual/cache: ${formatarMoeda(taxaFallback)}.` });
+        } else {
+          setResultadoEntrega({
+            ok: false,
+            texto: `Cliente a ${dist.toFixed(1)} km — fora da área de entrega. Informe a taxa manualmente para continuar.`,
+          });
+        }
         return;
       }
       const indice =
         zonasOrdenadas(zonasCfg.zonas).findIndex((z) => z.id === zona.id) + 1;
       // Preenche a taxa da zona automaticamente
       atualizar({ distanciaKm: dist, taxa: String(zona.taxa) });
+      if (lojaId) salvarTaxaEntregaCache(lojaId, zona.taxa);
       setResultadoEntrega({
         ok: true,
         texto: `Cliente a ${dist.toFixed(1)} km — Zona ${indice} (até ${
@@ -1024,11 +1108,16 @@ export default function Balcao({ aoPedidoCriado }: Props) {
         } km) — taxa ${formatarMoeda(zona.taxa)}.`,
       });
     } catch (erro) {
-      setResultadoEntrega({
-        ok: false,
-        texto:
-          erro instanceof Error ? erro.message : "Falha ao calcular a entrega.",
-      });
+      if (taxaFallback != null) {
+        atualizar({ taxa: String(taxaFallback) });
+        setResultadoEntrega({ ok: true, texto: `Falha de conexão. Usando taxa manual/cache: ${formatarMoeda(taxaFallback)}.` });
+      } else {
+        setResultadoEntrega({
+          ok: false,
+          texto:
+            (erro instanceof Error ? erro.message : "Falha ao calcular a entrega.") + " Informe a taxa manualmente para continuar.",
+        });
+      }
     } finally {
       setCalculandoEntrega(false);
     }
@@ -1355,69 +1444,19 @@ export default function Balcao({ aoPedidoCriado }: Props) {
 
         {/* Pills de categoria */}
         <div className="flex gap-2 flex-wrap items-center">
-          {["TODOS", ...categorias].map((c) => (
-            <span key={c} className="inline-flex items-center gap-1">
-              <button
-                onClick={() => setCategoria(c)}
-                className={`px-4 py-1.5 rounded-full text-sm font-semibold transition ${
-                  categoria === c
-                    ? "bg-green-600 text-white"
-                    : "bg-white text-gray-600 hover:bg-gray-100 border border-gray-200"
-                }`}
-              >
-                {c}
-              </button>
-              {c !== "TODOS" && (
-                <button
-                  type="button"
-                  onClick={() => excluirCategoria(c)}
-                  title={`Excluir categoria ${c}`}
-                  aria-label={`Excluir categoria ${c}`}
-                  className="flex h-6 w-6 items-center justify-center rounded-full text-gray-500 hover:bg-red-100 hover:text-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-600"
-                >
-                  ×
-                </button>
-              )}
-            </span>
-          ))}
-          {adicionandoCategoria ? (
-            <span className="flex items-center gap-1.5">
-              <input
-                type="text"
-                value={novaCategoria}
-                onChange={(e) => setNovaCategoria(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && confirmarNovaCategoria()}
-                placeholder="Nova categoria"
-                autoFocus
-                className="bg-white border border-green-400 rounded-full px-3 py-1.5 text-sm w-36 focus:outline-none focus:ring-2 focus:ring-green-500"
-              />
-              <button
-                onClick={confirmarNovaCategoria}
-                title="Salvar categoria"
-                className="bg-green-600 hover:bg-green-700 text-white rounded-full w-7 h-7 text-sm font-bold transition"
-              >
-                ✓
-              </button>
-              <button
-                onClick={() => {
-                  setAdicionandoCategoria(false);
-                  setNovaCategoria("");
-                }}
-                title="Cancelar"
-                className="bg-gray-200 hover:bg-gray-300 text-gray-600 rounded-full w-7 h-7 text-sm font-bold transition"
-              >
-                ✕
-              </button>
-            </span>
-          ) : (
+          {Array.from(new Set(["TODOS", ...categorias])).map((c) => (
             <button
-              onClick={() => setAdicionandoCategoria(true)}
-              title="Adicionar categoria"
-              className="bg-white hover:bg-green-50 text-green-700 border border-dashed border-green-400 rounded-full w-8 h-8 text-lg font-bold transition"
+              key={c}
+              onClick={() => setCategoria(c)}
+              className={`px-4 py-1.5 rounded-full text-sm font-semibold transition ${
+                categoria === c
+                  ? "bg-green-600 text-white"
+                  : "bg-white text-gray-600 hover:bg-gray-100 border border-gray-200"
+              }`}
             >
-              +
+              {c}
             </button>
-          )}
+          ))}
         </div>
 
         {/* Grade de produtos (6 colunas em telas grandes) */}

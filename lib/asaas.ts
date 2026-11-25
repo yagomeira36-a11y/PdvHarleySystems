@@ -1,12 +1,12 @@
 // ============================================================
-// ASAAS — cobrança da mensalidade (R$ 49,99 por mês)
+// ASAAS — cobrança da mensalidade (R$ 74,90 por mês)
 // ============================================================
 // ATENÇÃO: a chave secreta ASAAS_API_KEY deve estar nas variáveis
 // de ambiente do servidor. Este arquivo NUNCA pode ser importado
 // por componente "use client" — só por rotas de API (app/api/**).
 // ============================================================
 
-export const VALOR_MENSALIDADE = 49.99;
+export const VALOR_MENSALIDADE = 74.9;
 export const DESCRICAO_MENSALIDADE = "Ponto De Vendas Harley Systems - mensalidade mensal";
 
 export class ErroAsaas extends Error {

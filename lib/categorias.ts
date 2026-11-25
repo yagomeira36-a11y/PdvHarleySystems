@@ -4,8 +4,8 @@
 // criar quantas categorias quiser sem mexer no banco.
 // ============================================================
 
-// Categorias que já vêm prontas para toda loja nova
-export const CATEGORIAS_PADRAO = ["HAMBÚRGUER", "BEBIDAS", "PORÇÕES"];
+// Categoria padrão para loja nova (sem produtos/categorias pré-cadastradas)
+export const CATEGORIAS_PADRAO = ["TODOS"];
 
 export function chaveCategorias(lojaId: string): string {
   return `pdv_categorias_${lojaId}`;

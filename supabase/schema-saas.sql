@@ -98,7 +98,7 @@ CREATE TABLE products (
   name TEXT NOT NULL,                              -- nome do produto
   price NUMERIC(10,2) NOT NULL DEFAULT 0,          -- preço de venda
   cost NUMERIC(10,2) NOT NULL DEFAULT 0,           -- custo de produção (lucro)
-  category categoria_produto NOT NULL DEFAULT 'HAMBÚRGUER',
+  category categoria_produto NOT NULL DEFAULT 'TODOS',
   image_url TEXT,                                  -- foto do produto
   description TEXT,
   available BOOLEAN NOT NULL DEFAULT true,
@@ -362,20 +362,7 @@ BEGIN
   )
   RETURNING id INTO v_loja_id;
 
-  -- Cardápio padrão (12 produtos)
-  INSERT INTO public.products (name, price, cost, category, image_url, code, loja_id) VALUES
-    ('X-Burger Clássico',      29.90, 12.00, 'HAMBÚRGUER', '/placeholder.svg', 1,  v_loja_id),
-    ('X-Salada',               32.90, 13.50, 'HAMBÚRGUER', '/placeholder.svg', 2,  v_loja_id),
-    ('X-Bacon Duplo',          39.90, 16.50, 'HAMBÚRGUER', '/placeholder.svg', 3,  v_loja_id),
-    ('Burger da Casa',         34.90, 14.00, 'HAMBÚRGUER', '/placeholder.svg', 4,  v_loja_id),
-    ('Coca-Cola Lata 350ml',    6.00,  3.00, 'BEBIDAS',     '/placeholder.svg', 5,  v_loja_id),
-    ('Guaraná Lata 350ml',      6.00,  3.00, 'BEBIDAS',     '/placeholder.svg', 6,  v_loja_id),
-    ('Suco de Laranja 500ml',   9.90,  4.50, 'BEBIDAS',     '/placeholder.svg', 7,  v_loja_id),
-    ('Água Mineral 500ml',      4.00,  1.20, 'BEBIDAS',     '/placeholder.svg', 8,  v_loja_id),
-    ('Batata Frita Grande',    19.90,  8.00, 'PORÇÕES',     '/placeholder.svg', 9,  v_loja_id),
-    ('Batata Cheddar e Bacon', 29.90, 12.50, 'PORÇÕES',     '/placeholder.svg', 10, v_loja_id),
-    ('Onion Rings',            22.90,  9.00, 'PORÇÕES',     '/placeholder.svg', 11, v_loja_id),
-    ('Nuggets 12un',           24.90, 10.00, 'PORÇÕES',     '/placeholder.svg', 12, v_loja_id);
+  -- Loja nova come?a sem produtos cadastrados
 
   -- 9 mesas padrão do salão (4 ocupadas)
   INSERT INTO public.mesas (numero, status, loja_id) VALUES

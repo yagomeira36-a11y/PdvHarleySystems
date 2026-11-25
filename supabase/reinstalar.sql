@@ -35,7 +35,7 @@ CREATE TABLE products (
   name TEXT NOT NULL,                              -- nome do produto
   price NUMERIC(10,2) NOT NULL DEFAULT 0,          -- preço de venda
   cost NUMERIC(10,2) NOT NULL DEFAULT 0,           -- custo de produção (para calcular o lucro)
-  category categoria_produto NOT NULL DEFAULT 'HAMBÚRGUER', -- categoria (enum)
+  category categoria_produto NOT NULL DEFAULT 'TODOS', -- categoria (enum)
   image_url TEXT,                                  -- foto do produto
   description TEXT,
   available BOOLEAN NOT NULL DEFAULT true,
@@ -169,27 +169,7 @@ INSERT INTO mesas (numero, status) VALUES
   (9,'disponivel')
 ON CONFLICT (numero) DO NOTHING;
 
--- ------------------------------------------------------------
--- DADOS DE EXEMPLO: 12 produtos (4 hambúrgueres, 4 bebidas, 4 porções)
--- O campo cost é o custo de produção (usado no cálculo do lucro)
--- ------------------------------------------------------------
-INSERT INTO products (name, price, cost, category, image_url, code) VALUES
-  -- HAMBÚRGUERES
-  ('X-Burger Clássico',        29.90, 12.00, 'HAMBÚRGUER', '/placeholder.svg', 1),
-  ('X-Salada',                 32.90, 13.50, 'HAMBÚRGUER', '/placeholder.svg', 2),
-  ('X-Bacon Duplo',            39.90, 16.50, 'HAMBÚRGUER', '/placeholder.svg', 3),
-  ('Burger da Casa',           34.90, 14.00, 'HAMBÚRGUER', '/placeholder.svg', 4),
-  -- BEBIDAS
-  ('Coca-Cola Lata 350ml',      6.00,  3.00, 'BEBIDAS',     '/placeholder.svg', 5),
-  ('Guaraná Lata 350ml',        6.00,  3.00, 'BEBIDAS',     '/placeholder.svg', 6),
-  ('Suco de Laranja 500ml',     9.90,  4.50, 'BEBIDAS',     '/placeholder.svg', 7),
-  ('Água Mineral 500ml',        4.00,  1.20, 'BEBIDAS',     '/placeholder.svg', 8),
-  -- PORÇÕES
-  ('Batata Frita Grande',      19.90,  8.00, 'PORÇÕES',     '/placeholder.svg', 9),
-  ('Batata Cheddar e Bacon',   29.90, 12.50, 'PORÇÕES',     '/placeholder.svg', 10),
-  ('Onion Rings',              22.90,  9.00, 'PORÇÕES',     '/placeholder.svg', 11),
-  ('Nuggets 12un',             24.90, 10.00, 'PORÇÕES',     '/placeholder.svg', 12)
-ON CONFLICT DO NOTHING;
+-- Loja nova come?a sem produtos cadastrados
 
 -- ------------------------------------------------------------
 -- DADOS DE EXEMPLO: 3 motoboys para teste

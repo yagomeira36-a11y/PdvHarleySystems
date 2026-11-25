@@ -450,7 +450,9 @@ function ConteudoCardapio() {
   return (
     <main className="min-h-screen bg-[#f5f5f5] pb-24 lg:pb-0">
       <header>
-        <div className="h-52 bg-[#ddd] bg-cover bg-center sm:h-64 lg:h-72" style={banner ? { backgroundImage: `url(${banner})` } : undefined} />
+        <div className="relative h-52 overflow-hidden bg-[#ddd] sm:h-64 lg:h-72">
+          {banner ? <img src={banner} alt="Banner da loja" className="h-full w-full object-cover object-center" loading="eager" decoding="async" /> : null}
+        </div>
         <div className="bg-[#333333] text-white">
           <div className="mx-auto max-w-7xl px-4 pb-5 sm:px-6">
             <div className="-mt-12 flex flex-col items-start gap-4 sm:-mt-14 sm:flex-row sm:items-end">
@@ -618,7 +620,18 @@ function ConteudoCardapio() {
 
       {selecionado && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 sm:items-center" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelecionado(null); }}>
-          <div className="w-full max-w-lg rounded-t-3xl bg-white p-5 shadow-2xl sm:rounded-3xl">
+          <div className="w-full max-w-lg max-h-[92vh] overflow-y-auto rounded-t-3xl bg-white p-5 shadow-2xl sm:rounded-3xl">
+            {selecionado.image_url ? (
+              <img
+                src={selecionado.image_url}
+                alt={selecionado.name}
+                className="mb-4 w-full max-h-72 sm:max-h-96 rounded-2xl object-cover bg-gray-100"
+              />
+            ) : (
+              <div className="mb-4 flex w-full h-56 sm:h-72 items-center justify-center rounded-2xl bg-gray-100 text-sm text-gray-400">
+                Sem foto do produto
+              </div>
+            )}
             <div className="mb-4 flex items-start justify-between gap-3"><div><h2 className="text-xl font-black" style={{ color: VERDE }}>{selecionado.name}</h2><p className="mt-1 text-sm text-gray-500">{selecionado.description}</p></div><button type="button" onClick={() => setSelecionado(null)} className="text-2xl text-gray-400">×</button></div>
             <label className="block text-sm font-bold text-gray-700">Observação<textarea value={observacao} onChange={(event) => setObservacao(event.target.value)} placeholder="Ex: sem cebola" className="mt-2 h-20 w-full resize-none rounded-xl border border-gray-300 p-3" /></label>
             <div className="mt-4 flex items-center gap-3">

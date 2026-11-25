@@ -20,7 +20,7 @@ import PedidosFinalizados from "@/components/PedidosFinalizados";
 import TelaCaixa from "@/components/Caixa";
 import Relatorios from "@/components/Relatorios";
 import { getSessao, getSupabase } from "@/lib/supabase";
-import { sincronizarPedidosOffline } from "@/lib/offline-pdv";
+import { contarPendenciasOffline, sincronizarPedidosOffline } from "@/lib/offline-pdv";
 
 // Seções válidas (o padrão é o Balcão)
 const ABAS_VALIDAS: ItemAtivo[] = [
@@ -83,27 +83,35 @@ function ConteudoPDV() {
       if (!navigator.onLine || sincronizando) return;
       sincronizando = true;
       try {
+        const pendenciasAntes = await contarPendenciasOffline(lojaId);
         const resultado = await sincronizarPedidosOffline(clienteSupabase, lojaId);
         if (!ativo) return;
+        const pendenciasDepois = await contarPendenciasOffline(lojaId);
         if (resultado.sincronizados.length > 0) {
           setRefreshKey((atual) => atual + 1);
           callbackPedidoRef.current(
             `${resultado.sincronizados.length} pedido(s) offline sincronizado(s) com o servidor.`,
             "ok"
           );
+        } else if (pendenciasAntes > 0 && pendenciasDepois === 0) {
+          // atualizações/status sincronizados sem novos pedidos criados
+          setRefreshKey((atual) => atual + 1);
         }
         if (resultado.falhas.length > 0) {
           callbackPedidoRef.current(
-            `${resultado.falhas.length} pedido(s) continuam pendentes: ${resultado.falhas[0].mensagem}`,
+            `${resultado.falhas.length} item(ns) offline continuam pendentes: ${resultado.falhas[0].mensagem}`,
             "erro"
           );
         }
       } catch (error) {
         if (ativo) {
-          callbackPedidoRef.current(
-            error instanceof Error ? error.message : "Não foi possível sincronizar os pedidos offline.",
-            "erro"
-          );
+          const msg = error instanceof Error ? error.message : String(error || "");
+          const offline = typeof navigator !== "undefined" && !navigator.onLine;
+          const rede = offline || /failed to fetch|networkerror|network request failed|load failed|fetch failed|timeout|econn|socket/i.test(msg) || error instanceof TypeError;
+          if (!rede) {
+            callbackPedidoRef.current(msg || "Não foi possível sincronizar os pedidos offline.", "erro");
+          }
+          // erro de rede: mantém fila silenciosa, retry automático no próximo ciclo
         }
       } finally {
         sincronizando = false;
@@ -111,9 +119,19 @@ function ConteudoPDV() {
     }
 
     window.addEventListener("online", sincronizar);
+    const intervalo = window.setInterval(() => {
+      void (async () => {
+        try {
+          if ((await contarPendenciasOffline(lojaId)) > 0) await sincronizar();
+        } catch {
+          /* ignora falhas transitórias de leitura da fila */
+        }
+      })();
+    }, 15000);
     void sincronizar();
     return () => {
       ativo = false;
+      window.clearInterval(intervalo);
       window.removeEventListener("online", sincronizar);
     };
   }, []);

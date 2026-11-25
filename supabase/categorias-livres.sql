@@ -11,6 +11,6 @@ BEGIN;
 ALTER TABLE public.products
   ALTER COLUMN category DROP DEFAULT,
   ALTER COLUMN category TYPE TEXT USING category::text,
-  ALTER COLUMN category SET DEFAULT 'HAMBÚRGUER';
+  ALTER COLUMN category SET DEFAULT 'TODOS';
 
 COMMIT;

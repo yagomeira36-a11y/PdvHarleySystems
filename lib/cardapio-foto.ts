@@ -14,84 +14,66 @@ export type ResultadoLeituraFoto = {
   linhasLidas: number;
 };
 
-type CandidatoItem = {
-  nome: string;
-  inicio: number;
-  fimNome: number;
-  inicioPreco: number;
-  fimPreco: number;
-  preco: number;
-  precoBruto: string;
-};
+const RE_PRECO =
+  /(?:R\s*\$?\s*)?(\d{1,3}(?:[.\s]\d{3})*(?:[,.]\d{2})|\d{1,3}(?:[,.]\d{2}))(?!\d)/i;
 
-const NOMES_CONHECIDOS: { nome: string; padrao: RegExp }[] = [
-  { nome: "X-Burger", padrao: /(?<![A-Za-z])X\s*-?\s*Burger/gi },
-  { nome: "X-Bacon", padrao: /(?<![A-Za-z])X\s*-?\s*Bacon/gi },
-  { nome: "X-Calabresa", padrao: /(?<![A-Za-z])X\s*-?\s*Calabresa/gi },
-  { nome: "X-Tudo", padrao: /(?<![A-Za-z])X\s*-\s*Tudo/gi },
-  {
-    nome: "Duplo-XTudo",
-    padrao: /(?<![A-Za-z])Duplo\s*-?\s*X\s*-?\s*Tudo/gi,
-  },
-  {
-    nome: "Batata Turbinada",
-    padrao: /(?<![A-Za-z])Batata\s+Turbinada/gi,
-  },
-];
-
-const RE_ITEM_GENERICO =
-  /(?<![A-Za-z])(?:Duplo\s*-?\s*X\s*-?\s*Tudo|Batata\s+Turbinada[^0-9]*|X\s*-?\s*[A-Za-z]+)/gi;
-const RE_PRECO_PROXIMO = /(^|[^0-9])([0-9]{1,2})([,. ])\s?([0-9]{2})(?![0-9])/;
-
-function encontrarPreco(
-  texto: string,
-  inicio: number,
-  distanciaMaxima: number
-): Omit<CandidatoItem, "nome" | "inicio" | "fimNome"> | null {
-  const trecho = texto.slice(inicio, inicio + distanciaMaxima);
-  const achado = RE_PRECO_PROXIMO.exec(trecho);
-  if (!achado || achado.index === undefined) return null;
-
-  const inicioPreco = inicio + achado.index + achado[1].length;
-  const precoBruto = `${achado[2]}${achado[3]}${achado[4]}`;
-  const preco = Number(`${achado[2]}.${achado[4]}`);
-  return {
-    inicioPreco,
-    fimPreco: inicioPreco + achado[0].length - achado[1].length,
-    preco,
-    precoBruto,
-  };
+function normalizarLinhaOCR(linha: string): string {
+  return linha
+    .replace(/[|¦]/g, " ")
+    .replace(/[“”]/g, '"')
+    .replace(/[’`]/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-function adicionarCandidatos(
-  texto: string,
-  nome: string,
-  padrao: RegExp,
-  candidatos: CandidatoItem[]
-): void {
-  padrao.lastIndex = 0;
-  let achado: RegExpExecArray | null;
-  while ((achado = padrao.exec(texto)) !== null) {
-    if (achado.index === undefined) continue;
-    const fimNome = achado.index + achado[0].length;
-    const preco = encontrarPreco(texto, fimNome, 100);
-    if (!preco) continue;
+function corrigirTextoPreco(texto: string): string {
+  return texto
+    .replace(/\bR\s*[S5]\b/gi, "R$")
+    .replace(/\bRS\b/gi, "R$")
+    .replace(/(\d)[oO](\d)/g, "$10$2")
+    .replace(/(\d)[oO]\b/g, "$10")
+    .replace(/\b[oO](\d)/g, "0$1");
+}
 
-    let nomeItem = nome;
-    if (nome === "Batata Turbinada") {
-      const complemento = texto
-        .slice(fimNome, preco.inicioPreco)
-        .match(/^\s*(-\s*[PMG])\b/i)?.[1];
-      if (complemento) nomeItem += ` ${complemento.replace(/\s+/g, " ")}`;
-    }
-
-    candidatos.push({
-      nome: nomeItem,
-      inicio: achado.index,
-      fimNome,
-      ...preco,
-    });
+function extrairPrecoDaLinha(linha: string): { preco: number; indice: number; tamanho: number } | null {
+  const corrigida = corrigirTextoPreco(linha);
+  const matches = Array.from(corrigida.matchAll(new RegExp(RE_PRECO.source, "gi")));
+  for (let i = matches.length - 1; i >= 0; i--) {
+    const match = matches[i];
+    const bruto = match[1];
+    if (!bruto || match.index === undefined) continue;
+    const normalizado = bruto
+      .replace(/\s/g, "")
+      .replace(/\.(?=\d{3}(?:[,.]|$))/g, "")
+      .replace(",", ".");
+    const preco = Number(normalizado);
+    if (!Number.isFinite(preco) || preco < 1 || preco > 999) continue;
+    return { preco, indice: match.index, tamanho: match[0].length };
   }
+  return null;
+}
+
+function limparNomeProduto(bruto: string): string {
+  return bruto
+    .replace(/\bR\s*\$?\s*$/i, "")
+    .replace(/[.\-–—_·•|~]{2,}/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/^[\s\d\-–—.):;,*]+/, "")
+    .replace(/[\s\-–—.:;,]+$/, "")
+    .trim();
+}
+
+function pareceCabecalho(linha: string): boolean {
+  const limpa = linha.replace(/[^A-Za-zÀ-ÿ0-9 ]/g, "").trim();
+  if (!limpa) return true;
+  if (/^(card[aá]pio|menu|bebidas?|lanches?|por[cç][oõ]es?|combos?|adicionais?|sobremesas?|promo[cç][oõ]es?)$/i.test(limpa)) {
+    return true;
+  }
+  const letras = limpa.replace(/[^A-Za-zÀ-ÿ]/g, "");
+  if (letras.length >= 4 && letras === letras.toUpperCase() && limpa.split(/\s+/).length <= 4) {
+    return !/\d/.test(limpa);
+  }
+  return false;
 }
 
 function limparDescricao(bruta: string): string {
@@ -102,56 +84,84 @@ function limparDescricao(bruta: string): string {
     .replace(/\s+/g, " ")
     .replace(/^[\s,;:—–-]+|[\s,;:—–-]+$/g, "")
     .trim();
-  return /(?:Pão|Batata|Carne)/i.test(descricao) ? descricao : "";
+  if (!descricao) return "";
+  if (pareceCabecalho(descricao)) return "";
+  return descricao;
 }
 
 export function extrairItens(texto: string): ItemFoto[] {
-  const candidatos: CandidatoItem[] = [];
-  for (const conhecido of NOMES_CONHECIDOS) {
-    adicionarCandidatos(texto, conhecido.nome, conhecido.padrao, candidatos);
-  }
+  const linhas = texto
+    .split(/\r?\n/)
+    .map(normalizarLinhaOCR)
+    .filter((linha) => linha.length > 0);
 
-  RE_ITEM_GENERICO.lastIndex = 0;
-  let achado: RegExpExecArray | null;
-  while ((achado = RE_ITEM_GENERICO.exec(texto)) !== null) {
-    if (achado.index === undefined) continue;
-    const inicio = achado.index;
-    const jaEncontrado = candidatos.some(
-      (candidato) =>
-        inicio >= candidato.inicio && inicio < candidato.fimNome
-    );
-    if (jaEncontrado) continue;
-    const fimNome = inicio + achado[0].length;
-    const preco = encontrarPreco(texto, fimNome, 30);
-    if (!preco) continue;
-    candidatos.push({
-      nome: achado[0].replace(/\s+/g, " ").trim(),
-      inicio,
-      fimNome,
-      ...preco,
-    });
-  }
-
-  candidatos.sort((a, b) => a.inicio - b.inicio);
   const itens: ItemFoto[] = [];
-  const vistos = new Set<string>();
-  for (let i = 0; i < candidatos.length; i++) {
-    const candidato = candidatos[i];
-    const chave = candidato.nome.toLowerCase();
-    if (vistos.has(chave)) continue;
-    vistos.add(chave);
+  let descricaoPendente = "";
 
-    const preco =
-      candidato.nome === "Duplo-XTudo" && /^75\s+00$/.test(candidato.precoBruto)
-        ? 28
-        : candidato.preco;
-    const proximo = candidatos[i + 1];
-    const descricao = limparDescricao(
-      texto.slice(candidato.fimPreco, proximo?.inicio ?? texto.length)
-    );
-    itens.push({ nome: candidato.nome, preco, descricao });
+  for (let i = 0; i < linhas.length; i++) {
+    const linha = linhas[i];
+    const precoInfo = extrairPrecoDaLinha(linha);
+
+    if (precoInfo) {
+      let nomeBruto = linha.slice(0, precoInfo.indice);
+      let descricao = linha.slice(precoInfo.indice + precoInfo.tamanho);
+
+      if (nomeBruto.replace(/[^A-Za-zÀ-ÿ0-9]/g, "").length < 3) {
+        for (let j = itens.length - 1; j >= 0; j--) {
+          if (!itens[j].nome) continue;
+          nomeBruto = `${itens[j].nome} ${nomeBruto}`;
+          itens.splice(j, 1);
+          break;
+        }
+      }
+
+      if (nomeBruto.replace(/[^A-Za-zÀ-ÿ0-9]/g, "").length < 3 && i > 0) {
+        const anterior = linhas[i - 1];
+        if (!extrairPrecoDaLinha(anterior) && !pareceCabecalho(anterior)) {
+          nomeBruto = `${anterior} ${nomeBruto}`;
+        }
+      }
+
+      const nome = limparNomeProduto(nomeBruto);
+      if (nome.length < 2) continue;
+
+      const descricaoLimpa = limparDescricao(
+        [descricaoPendente, descricao].filter(Boolean).join(" ")
+      );
+      descricaoPendente = "";
+
+      itens.push({
+        nome,
+        preco: precoInfo.preco,
+        descricao: descricaoLimpa,
+      });
+      continue;
+    }
+
+    if (itens.length > 0 && !pareceCabecalho(linha) && linha.length <= 90) {
+      const ultimo = itens[itens.length - 1];
+      const complemento = limparDescricao(linha);
+      if (complemento) {
+        ultimo.descricao = limparDescricao(
+          [ultimo.descricao, complemento].filter(Boolean).join(" ")
+        );
+      }
+    } else if (!pareceCabecalho(linha) && linha.length <= 60) {
+      descricaoPendente = limparDescricao(
+        [descricaoPendente, linha].filter(Boolean).join(" ")
+      );
+    } else {
+      descricaoPendente = "";
+    }
   }
-  return itens;
+
+  const vistos = new Set<string>();
+  return itens.filter((item) => {
+    const chave = `${item.nome.toLowerCase()}|${item.preco.toFixed(2)}`;
+    if (vistos.has(chave)) return false;
+    vistos.add(chave);
+    return true;
+  });
 }
 
 function criarImagemBase(imagem: ImageBitmap): HTMLCanvasElement {
