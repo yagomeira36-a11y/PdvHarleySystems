@@ -1,10 +1,12 @@
 ﻿version: 2
 updates:
+  # Pausado: Dependabot estava abrindo bumps que quebraram deploy/produção.
+  # Reative manualmente quando quiser revisar atualizações com calma.
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
-      interval: "daily"
-    open-pull-requests-limit: 10
+      interval: "monthly"
+    open-pull-requests-limit: 0
     labels:
       - "dependencies"
       - "security"
