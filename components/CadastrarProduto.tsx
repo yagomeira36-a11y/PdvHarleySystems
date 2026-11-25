@@ -14,6 +14,7 @@ import {
   Product,
   Categoria,
 } from "@/lib/supabase";
+import { validarImagemUpload } from "@/lib/upload-image";
 import { CATEGORIAS_PADRAO, lerCategorias, salvarCategorias } from "@/lib/categorias";
 import { lerCardapioDaFoto } from "@/lib/cardapio-foto";
 
@@ -49,12 +50,16 @@ const FORM_VAZIO: FormProduto = {
   foto: null,
 };
 
-function mensagemColunaProdutoAusente(erro: string): string | null {
+function mensagemColunaProdutoAusente(mensagem: any): string | null {
+  const texto = String(mensagem?.message ?? mensagem ?? "");
+  if (!texto || texto === "null" || texto === "undefined") return null;
   const colunaAusente =
-    /Could not find the '(available|description)' column of 'products' in the schema cache/i.exec(erro)?.[1] ||
-    /column\s+(?:public\.)?products\.(available|description)\s+does not exist/i.exec(erro)?.[1];
-  if (!colunaAusente) return null;
-
+    /Could not find the '(available|description)' column of 'products' in the schema cache/i.exec(texto)?.[1] ||
+    /column\s+(?:public\.)?products\.(available|description)\s+does not exist/i.exec(texto)?.[1];
+  if (!colunaAusente) {
+    if (texto.includes("Could not find") || texto.toLowerCase().includes("column")) return "O banco ainda não tem a coluna necessária dos produtos. No SQL Editor do Supabase, execute supabase/disponibilidade-produtos.sql e tente novamente.";
+    return null;
+  }
   const campo = colunaAusente === "description" ? "descrição" : "disponibilidade";
   return `O banco ainda não tem a coluna de ${campo} dos produtos. No SQL Editor do Supabase, execute supabase/disponibilidade-produtos.sql e tente novamente.`;
 }
@@ -143,61 +148,34 @@ export default function CadastrarProduto() {
       return;
     }
 
-    // Tabela antiga do banco tem colunas em português (nome, preco, codigo)
-    // obrigatórias; o schema novo usa só as colunas em inglês. Envia as duas
-    // versões e, se alguma coluna não existir, tenta de novo só com o padrão.
-    const completo = {
-      ...dados,
-      nome: dados.name,
-      preco: dados.price,
-      codigo: dados.code,
+    const payload: Record<string, unknown> = {
+      name: dados.name,
+      price: dados.price,
+      cost: 0,
+      category: dados.category,
+      image_url: dados.image_url ?? null,
+      description: dados.description,
+      available: dados.available,
+      code: dados.code,
+      loja_id: dados.loja_id,
     };
 
-    const executar = (payload: Record<string, unknown>) =>
-      editandoId
-        ? supabase.from("products").update(payload).eq("id", editandoId)
-        : supabase.from("products").insert(payload);
+    const resultado = editandoId
+      ? await supabase.from("products").update(payload).eq("id", editandoId)
+      : await supabase.from("products").insert(payload);
 
-    // Categoria nova ainda bloqueada pelo enum do banco -> aviso amigável
-    const bloqueadaPorEnum = (mensagem: string) => {
-      if (!mensagem.includes("categoria_produto")) return false;
-      setMensagem(
-        "Para usar categorias novas, libere o banco primeiro: no Supabase, abra o SQL Editor e rode o arquivo supabase/categorias-livres.sql (uma única vez). Depois cadastre de novo."
-      );
-      return true;
-    };
-
-    const primeira = await executar(completo);
-    if (primeira.error) {
-      const erroColunaProduto = mensagemColunaProdutoAusente(primeira.error.message);
+    if (resultado.error) {
+      console.log("ERRO REAL SUPABASE:", JSON.stringify(resultado.error, null, 2));
+      const erroColunaProduto = mensagemColunaProdutoAusente(resultado.error);
       if (erroColunaProduto) {
         setMensagem(erroColunaProduto);
         return;
       }
-      if (bloqueadaPorEnum(primeira.error.message)) return;
-      // "Could not find the 'x' column" = schema novo (sem colunas pt-BR)
-      if (primeira.error.message.includes("Could not find the")) {
-        const segunda = await executar(dados);
-        if (segunda.error) {
-          const erroColunaProduto = mensagemColunaProdutoAusente(segunda.error.message);
-          if (erroColunaProduto) {
-            setMensagem(erroColunaProduto);
-            return;
-          }
-          if (bloqueadaPorEnum(segunda.error.message)) return;
-          setMensagem(
-            (editandoId ? "Erro ao atualizar: " : "Erro ao cadastrar: ") +
-              segunda.error.message
-          );
-          return;
-        }
-      } else {
-        setMensagem(
-          (editandoId ? "Erro ao atualizar: " : "Erro ao cadastrar: ") +
-            primeira.error.message
-        );
-        return;
-      }
+      setMensagem(
+        (editandoId ? "Erro ao atualizar: " : "Erro ao cadastrar: ") +
+          (resultado.error?.message ?? "erro desconhecido")
+      );
+      return;
     }
 
     setMensagem(editandoId ? "Produto atualizado!" : "Produto cadastrado!");
@@ -235,19 +213,13 @@ export default function CadastrarProduto() {
   }
 
   // Escolhe/troca a foto do produto no formulário (salva junto ao cadastrar/editar)
-  function escolherFotoProdutoForm(e: React.ChangeEvent<HTMLInputElement>) {
+  async function escolherFotoProdutoForm(e: React.ChangeEvent<HTMLInputElement>) {
     const arquivo = e.target.files?.[0];
     e.target.value = "";
     setErroFotoProduto(null);
     if (!arquivo) return;
-    if (!arquivo.type.startsWith("image/")) {
-      setErroFotoProduto("Escolha um arquivo de imagem (JPG, PNG...).");
-      return;
-    }
-    if (arquivo.size > 1.5 * 1024 * 1024) {
-      setErroFotoProduto("Imagem muito grande. Use uma de até 1,5 MB.");
-      return;
-    }
+    const validacao = await validarImagemUpload(arquivo, 1.5);
+    if (!validacao.ok) { setErroFotoProduto(validacao.erro); return; }
     const leitor = new FileReader();
     leitor.onload = () => setForm((atual) => ({ ...atual, foto: String(leitor.result) }));
     leitor.onerror = () => setErroFotoProduto("Não foi possível ler a imagem. Escolha outro arquivo.");
@@ -255,6 +227,7 @@ export default function CadastrarProduto() {
   }
 
   // ============================================================
+  // CATEGORIAS (adicionar/excluir) — gerenciamento movido do Balcão  // ============================================================
   // CATEGORIAS (adicionar/excluir) — gerenciamento movido do Balcão
   // ============================================================
   function adicionarCategoria() {
@@ -329,10 +302,12 @@ export default function CadastrarProduto() {
   // ============================================================
 
   // Escolheu uma foto: mostra a prévia e começa a leitura
-  function escolherFoto(e: React.ChangeEvent<HTMLInputElement>) {
+  async function escolherFoto(e: React.ChangeEvent<HTMLInputElement>) {
     const arquivo = e.target.files?.[0];
     e.target.value = ""; // permite escolher a mesma foto de novo
     if (!arquivo) return;
+    const validacao = await validarImagemUpload(arquivo, 8);
+    if (!validacao.ok) { setMensagem(validacao.erro); return; }
     if (fotoUrl) URL.revokeObjectURL(fotoUrl);
     setFotoUrl(URL.createObjectURL(arquivo));
     setItensRevisao([]);
@@ -341,7 +316,7 @@ export default function CadastrarProduto() {
     void lerFoto(arquivo);
   }
 
-  // Roda o OCR e monta a lista para revisão
+  // Roda o OCR e monta a lista para revisão  // Roda o OCR e monta a lista para revisão
   async function lerFoto(arquivo: File) {
     setLendoFoto(true);
     setProgressoFoto(0);
@@ -414,26 +389,22 @@ export default function CadastrarProduto() {
     if (!supabase) return "Sem conexão com o banco.";
     const sessao = getSessao();
     if (!sessao) return "Sessão expirada. Entre novamente.";
-    const base = lista.map((d) => ({ ...d, loja_id: sessao.id }));
-    const completo = base.map((d) => ({
-      ...d,
-      nome: d.name,
-      preco: d.price,
-      codigo: d.code,
-      descricao: d.description,
+    const base = lista.map((d) => ({
+      name: d.name,
+      price: d.price,
+      cost: 0,
+      category: d.category,
+      image_url: null,
+      description: d.description,
+      available: true,
+      code: d.code,
+      loja_id: sessao.id,
     }));
 
-    const primeira = await supabase.from("products").insert(completo);
-    if (!primeira.error) return null;
-    if (primeira.error.message.includes("categoria_produto")) {
-      return "Uma das categorias não existe no banco. No SQL Editor do Supabase, rode supabase/categorias-livres.sql e tente de novo.";
-    }
-    if (primeira.error.message.includes("Could not find the")) {
-      const segunda = await supabase.from("products").insert(base);
-      if (!segunda.error) return null;
-      return "Erro ao importar: " + segunda.error.message;
-    }
-    return "Erro ao importar: " + primeira.error.message;
+    const resultado = await supabase.from("products").insert(base);
+    if (!resultado.error) return null;
+    console.log("ERRO REAL SUPABASE:", JSON.stringify(resultado.error, null, 2));
+    return "Erro ao importar: " + (resultado.error?.message ?? "erro desconhecido");
   }
 
   // Salva os itens marcados na revisão

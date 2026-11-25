@@ -54,7 +54,7 @@ ALTER TABLE lojas ADD COLUMN IF NOT EXISTS data_vencimento DATE;
 ALTER TABLE lojas ADD COLUMN IF NOT EXISTS plano TEXT NOT NULL DEFAULT 'basico';
 ALTER TABLE lojas ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now();
 
--- Integração com o Asaas (cobrança da mensalidade de R$ 49,99/mês)
+-- Integração com o Asaas (cobrança da mensalidade de R$ 74,90/mês)
 ALTER TABLE lojas ADD COLUMN IF NOT EXISTS asaas_customer_id TEXT;
 ALTER TABLE lojas ADD COLUMN IF NOT EXISTS asaas_subscription_id TEXT;
 

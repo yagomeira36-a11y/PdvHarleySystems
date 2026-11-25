@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { urlCardapioPublico } from "@/lib/cardapio-publico";
 import { getSessao, normalizarTelefone } from "@/lib/supabase";
+import { validarImagemUpload } from "@/lib/upload-image";
 import DeliveryZonesMap from "./DeliveryZonesMap";
 
 type StoreSettings = {
@@ -127,11 +128,12 @@ export default function LojaOnline() {
     setDados((atual) => ({ ...atual, [campo]: valor }));
   }
 
-  function escolherImagem(event: React.ChangeEvent<HTMLInputElement>, campo: "banner_url" | "logo_url") {
+  async function escolherImagem(event: React.ChangeEvent<HTMLInputElement>, campo: "banner_url" | "logo_url") {
     const arquivo = event.target.files?.[0];
+    event.target.value = "";
     if (!arquivo) return;
-    if (!arquivo.type.startsWith("image/")) { setMensagem("Escolha um arquivo de imagem."); return; }
-    if (arquivo.size > 2 * 1024 * 1024) { setMensagem("A imagem deve ter até 2 MB."); return; }
+    const validacao = await validarImagemUpload(arquivo, 2);
+    if (!validacao.ok) { setMensagem(validacao.erro); return; }
     const leitor = new FileReader();
     leitor.onload = () => alterar(campo, String(leitor.result));
     leitor.readAsDataURL(arquivo);
@@ -167,11 +169,12 @@ export default function LojaOnline() {
     }));
   }
 
-  function escolherIconeOutro(event: React.ChangeEvent<HTMLInputElement>, indice: number) {
+  async function escolherIconeOutro(event: React.ChangeEvent<HTMLInputElement>, indice: number) {
     const arquivo = event.target.files?.[0];
+    event.target.value = "";
     if (!arquivo) return;
-    if (!arquivo.type.startsWith("image/")) { setMensagem("Escolha um arquivo de imagem."); return; }
-    if (arquivo.size > 1 * 1024 * 1024) { setMensagem("O ícone deve ter até 1 MB."); return; }
+    const validacao = await validarImagemUpload(arquivo, 1);
+    if (!validacao.ok) { setMensagem(validacao.erro); return; }
     const leitor = new FileReader();
     leitor.onload = () => alterarOutroApp(indice, "icone", String(leitor.result));
     leitor.readAsDataURL(arquivo);

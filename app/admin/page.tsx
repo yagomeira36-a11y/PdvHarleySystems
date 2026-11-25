@@ -177,7 +177,7 @@ export default function Admin() {
   // Chama a rota /api/admin/criar-loja, que no servidor:
   // 1. cria a loja (login + cardápio padrão)
   // 2. cria o cliente no Asaas
-  // 3. cria a assinatura de R$ 49,99/mês
+  // 3. cria a assinatura de R$ 74,90/mês
   // A chave do Asaas fica só no servidor.
   // ============================================================
   async function criarLoja(e: React.FormEvent) {

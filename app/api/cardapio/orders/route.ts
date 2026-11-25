@@ -1,7 +1,11 @@
-import { NextRequest, NextResponse } from "next/server";
-import { getSupabase, normalizarTelefone } from "@/lib/supabase";
+﻿import { NextRequest, NextResponse } from "next/server";
+import { getSupabaseAdmin } from "@/lib/supabase-server";
+import { normalizarTelefone } from "@/lib/supabase";
+import { verificarRateLimit, ipDoRequest } from "@/lib/rate-limit";
+import { erroGenerico } from "@/lib/api-security";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 type CheckoutItemInput = {
   product_id?: unknown;
@@ -18,8 +22,11 @@ function texto(value: unknown, maxLength: number) {
 }
 
 export async function POST(request: NextRequest) {
-  const supabase = getSupabase();
-  if (!supabase) return json({ error: "Serviço de pedidos indisponível." }, 503);
+  const ip = ipDoRequest(request);
+  const rl = verificarRateLimit(`cardapio-order:${ip}`, 20, 15 * 60 * 1000, 15 * 60 * 1000);
+  if (!rl.ok) return json({ error: "Muitas tentativas. Tente novamente em alguns minutos." }, 429);
+
+  const supabase = getSupabaseAdmin();
 
   const body = await request.json().catch(() => null);
   if (!body || typeof body !== "object") return json({ error: "Dados do pedido inválidos." }, 400);
@@ -70,7 +77,7 @@ export async function POST(request: NextRequest) {
     .in("id", productIds);
   if (erroProdutos) {
     console.error("Falha ao consultar produtos do checkout:", erroProdutos.message);
-    return json({ error: "Não foi possível validar os produtos do pedido." }, 502);
+    return erroGenerico(502, "Não foi possível validar os produtos do pedido.");
   }
 
   const produtosPorId = new Map(
@@ -120,7 +127,7 @@ export async function POST(request: NextRequest) {
 
   if (erroPedido || !pedido) {
     console.error("Falha ao salvar pedido do cardápio:", erroPedido?.message || "Sem retorno do pedido");
-    return json({ error: "Não foi possível salvar o pedido. Tente novamente." }, 502);
+    return erroGenerico(502, "Não foi possível salvar o pedido. Tente novamente.");
   }
 
   const { error: erroItens } = await supabase.from("order_items").insert(
@@ -141,7 +148,7 @@ export async function POST(request: NextRequest) {
       .eq("id", pedido.id)
       .eq("loja_id", lojaId);
     console.error("Falha ao salvar itens do pedido:", erroItens.message, erroRemocao?.message || "");
-    return json({ error: "O pedido não foi concluído porque não foi possível salvar os itens." }, 502);
+    return erroGenerico(502, "O pedido não foi concluído porque não foi possível salvar os itens.");
   }
 
   if (tipo === "Entrega") {

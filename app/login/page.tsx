@@ -1,19 +1,9 @@
-"use client";
+﻿"use client";
 
-// ============================================================
-// TELA DE LOGIN (SaaS Ponto De Vendas Harley Systems)
-// - E-mail + senha (sem botão de criar conta)
-// - Senha errada -> "Acesso negado"
-// - Loja vencida ou bloqueada -> /pagamento (só a tela do Asaas)
-// - Credenciais do super admin também entram por aqui -> /admin
-// - Visual azul igual à sidebar do sistema
-// ============================================================
 import { useState } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { getSupabase, salvarSessao, sha256Hex, Sessao } from "@/lib/supabase";
 import { lojaSemAcesso } from "@/lib/acesso-loja";
-import { validarLoginSuperAdmin } from "@/lib/admin";
 
 export default function Login() {
   const router = useRouter();
@@ -32,74 +22,36 @@ export default function Login() {
       return;
     }
 
-    // Credenciais do super admin nesta mesma tela -> painel /admin
-    // (a senha editável pelo painel vale assim que o SQL for rodado;
-    // sem o SQL, cai nas credenciais fixas do código)
-    const adminOk = await validarLoginSuperAdmin(email, senha);
-    if (adminOk.ok) {
-      sessionStorage.setItem("menUAU_admin_ok", "1");
-      router.replace("/admin");
-      return;
-    }
-    if (adminOk.erro) {
-      setErro(adminOk.erro);
-      return;
-    }
-
-    const supabase = getSupabase();
-    if (!supabase) {
-      setErro("Banco de dados não configurado.");
-      return;
-    }
-
     setCarregando(true);
-    // A senha é criptografada aqui no navegador (SHA-256) e o banco
-    // só compara os códigos — sem depender do digest() do pgcrypto
-    const hash = await sha256Hex(senha);
-    const { data, error } = await supabase.rpc("login_loja_hash", {
-      p_email: email.trim(),
-      p_senha_hash: hash,
-    });
-    setCarregando(false);
+    try {
+      const resp = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email.trim(), senha }),
+      });
+      const data = await resp.json().catch(() => null);
 
-    if (error && !error.message.includes("Could not find the function")) {
-      setErro("Erro no banco: " + error.message);
-      return;
-    }
-
-    // Se a função ainda não foi criada no banco, confere direto na
-    // tabela "lojas" (mesma comparação de hash) — assim o login
-    // funciona mesmo sem rodar nenhum SQL no Supabase
-    let loja: Sessao | null = error ? null : (data as Sessao | null);
-    if (!loja) {
-      const { data: linha, error: erro2 } = await supabase
-        .from("lojas")
-        .select("id,nome_loja,email_dono,status_pagamento,data_vencimento,plano,senha_hash")
-        .ilike("email_dono", email.trim())
-        .maybeSingle();
-      if (erro2) {
-        setErro("Erro no banco: " + erro2.message);
+      if (!resp.ok) {
+        setErro(typeof data?.error === "string" ? data.error : "Acesso negado");
         return;
       }
-      if (linha && linha.senha_hash === hash) {
-        loja = linha as Sessao;
+
+      if (data?.tipo === "admin") {
+        sessionStorage.setItem("menUAU_admin_ok", "1");
+        router.replace("/admin");
+        return;
       }
-    }
 
-    // E-mail/senha não conferem
-    if (!loja) {
-      setErro("Acesso negado");
-      return;
-    }
-
-    salvarSessao(loja);
-
-    // Loja vencida (data atingida), bloqueada ou com o admin marcando
-    // como vencida -> entra, mas só na tela de pagamento do Asaas
-    if (lojaSemAcesso(loja)) {
-      router.replace("/pagamento");
-    } else {
-      router.replace("/pdv");
+      const loja = data?.sessao;
+      if (loja && lojaSemAcesso(loja)) {
+        router.replace("/pagamento");
+      } else {
+        router.replace("/pdv");
+      }
+    } catch {
+      setErro("Não foi possível entrar. Tente novamente.");
+    } finally {
+      setCarregando(false);
     }
   }
 
@@ -120,7 +72,6 @@ export default function Login() {
           </p>
         </div>
 
-        {/* Erro */}
         {erro && (
           <p className="bg-red-50 border border-red-400 text-red-600 rounded-lg p-3 text-sm font-semibold mb-4">
             {erro}
@@ -138,6 +89,7 @@ export default function Login() {
               onChange={(e) => setEmail(e.target.value)}
               placeholder="email@suafranquia.com"
               autoFocus
+              autoComplete="username"
               className="w-full border border-gray-300 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#2563EB]"
             />
           </div>
@@ -150,6 +102,7 @@ export default function Login() {
               value={senha}
               onChange={(e) => setSenha(e.target.value)}
               placeholder="••••••••"
+              autoComplete="current-password"
               className="w-full border border-gray-300 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#2563EB]"
             />
           </div>
@@ -164,7 +117,7 @@ export default function Login() {
         </form>
 
         <p className="text-center text-[11px] text-gray-400 mt-6">
-          Deu erro no login? Nos contate: +55 11 95925-6735.
+          Problemas no acesso? Contate o suporte.
         </p>
       </div>
     </div>

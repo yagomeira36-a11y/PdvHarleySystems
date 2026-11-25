@@ -31,7 +31,7 @@ const cliente = { id: "cus_atual", name: "Loja teste", email: "teste@example.com
 const assinatura = { id: "sub_atual", customer: cliente.id, status: "ACTIVE", nextDueDate: "2026-12-19" };
 const pagamento = {
   id: "pay_atual", customer: cliente.id, subscription: assinatura.id,
-  status: "PENDING", billingType: "BOLETO", value: 49.99, dueDate: "2026-11-19",
+  status: "PENDING", billingType: "BOLETO", value: 74.90, dueDate: "2026-11-19",
   invoiceUrl: "/fatura", bankSlipUrl: "/boleto",
 };
 
@@ -272,7 +272,7 @@ for (const falha of [null, "pix", "boleto"]) {
   test(`consulta entrega Pix e boleto independentemente (falha: ${falha})`, async () => {
     const db = banco({ ...loja, asaas_customer_id: cliente.id, asaas_subscription_id: assinatura.id });
     const { GET } = rota("app/api/asaas/cobranca/route.ts", db, {
-      VALOR_MENSALIDADE: 49.99,
+      VALOR_MENSALIDADE: 74.90,
       buscarCobrancaAberta: async (...args) => { assert.deepEqual(args, [cliente.id, loja.id, assinatura.id]); return pagamento; },
       buscarPixAsaas: async () => { if (falha === "pix") throw new Error("Pix indisponível"); return { encodedImage: "imagem", payload: "codigo-pix" }; },
       buscarBoletoAsaas: async () => { if (falha === "boleto") throw new Error("Boleto indisponível"); return { identificationField: "linha-boleto", barCode: "codigo-barras" }; },

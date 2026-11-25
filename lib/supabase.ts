@@ -5,17 +5,76 @@ import { createClient, SupabaseClient } from "@supabase/supabase-js";
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-// Instância única do cliente (singleton)
-let client: SupabaseClient | null = null;
+// Cliente leve que roteia operações sensíveis para rotas server (service_role no servidor).
+type PdvResult = { data: any; error: any };
+class PdvQuery {
+  private body: any;
+  private execPromise: Promise<PdvResult> | null = null;
+  constructor(table: string, action: string) { this.body = { table, action, filters: [], order: [] }; }
+  select(cols: string = "*") { this.body.select = cols; return this; }
+  eq(col: string, val: unknown) { this.body.filters.push({ op: "eq", col, val }); return this; }
+  neq(col: string, val: unknown) { this.body.filters.push({ op: "neq", col, val }); return this; }
+  in(col: string, val: unknown[]) { this.body.filters.push({ op: "in", col, val }); return this; }
+  not(col: string, notOp: string, notVal: unknown) { this.body.filters.push({ op: "not", col, notOp, notVal }); return this; }
+  gte(col: string, val: unknown) { this.body.filters.push({ op: "gte", col, val }); return this; }
+  lte(col: string, val: unknown) { this.body.filters.push({ op: "lte", col, val }); return this; }
+  gt(col: string, val: unknown) { this.body.filters.push({ op: "gt", col, val }); return this; }
+  lt(col: string, val: unknown) { this.body.filters.push({ op: "lt", col, val }); return this; }
+  ilike(col: string, val: unknown) { this.body.filters.push({ op: "ilike", col, val }); return this; }
+  order(col: string, opts?: { ascending?: boolean }) { this.body.order.push({ col, ascending: opts?.ascending !== false }); return this; }
+  limit(n: number) { this.body.limit = n; return this; }
+  range(from: number, to: number) { this.body.range = [from, to]; return this; }
+  single() { this.body.single = true; return this; }
+  maybeSingle() { this.body.maybeSingle = true; return this; }
+  insert(data: any) { this.body.action = "insert"; this.body.data = data; return this; }
+  update(data: any) { this.body.action = "update"; this.body.data = data; return this; }
+  delete() { this.body.action = "delete"; return this; }
+  upsert(data: any, opts?: { onConflict?: string }) { this.body.action = "upsert"; this.body.data = data; if (opts?.onConflict) this.body.onConflict = opts.onConflict; return this; }
+  private exec(): Promise<PdvResult> {
+    if (!this.execPromise) {
+      this.execPromise = fetch("/api/pdv", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(this.body),
+      }).then(async (r) => {
+        const j = await r.json().catch(() => null);
+        if (!r.ok) return { data: null, error: { message: j?.error ?? "Erro de servidor", code: j?.error?.code } };
+        return { data: j?.data ?? null, error: j?.error ?? null };
+      }).catch((e) => ({ data: null, error: { message: e instanceof Error ? e.message : "Erro de rede" } }));
+    }
+    return this.execPromise;
+  }
+  then<TResult1 = PdvResult, TResult2 = never>(onfulfilled?: ((value: PdvResult) => TResult1 | PromiseLike<TResult1>) | null, onrejected?: ((reason: any) => TResult2 | PromiseLike<TResult2>) | null) {
+    return this.exec().then(onfulfilled, onrejected);
+  }
+}
+class PdvClient {
+  from(table: string) { return new PdvQuery(table, "select"); }
+  rpc(fn: string, args?: Record<string, unknown>) {
+    return fetch("/api/pdv/rpc", {
+      method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fn, args: args ?? {} }),
+    }).then(async (r) => {
+      const j = await r.json().catch(() => null);
+      if (!r.ok) return { data: null, error: { message: j?.error ?? "Erro de servidor" } };
+      return { data: j?.data ?? null, error: j?.error ?? null };
+    }).catch((e) => ({ data: null, error: { message: e instanceof Error ? e.message : "Erro de rede" } }));
+  }
+}
+let client: PdvClient | null = null;
 
-// Retorna o cliente Supabase, ou null se o .env.local não estiver configurado
 export function getSupabase(): SupabaseClient | null {
+  if (typeof window === "undefined") return null;
+  if (!client) client = new PdvClient();
+  return client as unknown as SupabaseClient;
+}
+
+// Cliente real somente para casos públicos/legados que precisem acesso direto (evitar em dados sensíveis).
+export function getSupabasePublic(): SupabaseClient | null {
   if (!supabaseUrl || !supabaseKey) return null;
   if (!supabaseUrl.startsWith("https://") || supabaseUrl.includes("SEU-PROJETO")) return null;
-  if (!client) {
-    client = createClient(supabaseUrl, supabaseKey);
-  }
-  return client;
+  return createClient(supabaseUrl, supabaseKey);
 }
 
 // ============================================================
@@ -23,8 +82,7 @@ export function getSupabase(): SupabaseClient | null {
 // ============================================================
 
 // Categoria do produto — texto livre, o dono da loja pode criar novas
-// (ex: "molhos"). O banco precisa ter a coluna como TEXT; se ainda for
-// enum, rode supabase/categorias-livres.sql uma vez.
+// (ex: "molhos"). A coluna no banco é `category` (text).
 export type Categoria = string;
 
 // Produto do cardápio (tabela "products")
@@ -165,6 +223,11 @@ export function linkWhatsApp(telefone: string | null | undefined): string | null
 // O login grava os dados da loja em um cookie; o middleware
 // protege as telas e cada consulta filtra por loja_id.
 // ============================================================
+// SESSÃO DA LOJA
+// O login do servidor emite um JWT assinado com expiração curta.
+// O cookie é legível no cliente apenas para UI; a autorização
+// real é validada no servidor (middleware/API) pela assinatura.
+// ============================================================
 export type Sessao = {
   id: string;
   nome_loja: string;
@@ -176,33 +239,61 @@ export type Sessao = {
 
 const COOKIE_SESSAO = "loja_sessao";
 
-// Lê a sessão salva no cookie (null se não estiver logado)
+function decodificarJwtSessao(token: string): Sessao | null {
+  const partes = token.split(".");
+  if (partes.length < 2) return null;
+  try {
+    const base64 = partes[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+    const json = decodeURIComponent(
+      Array.from(atob(padded), (c) => `%${c.charCodeAt(0).toString(16).padStart(2, "0")}`).join("")
+    );
+    const payload = JSON.parse(json) as Record<string, unknown>;
+    if (payload.tipo !== "loja" || typeof payload.id !== "string" || !payload.id) return null;
+    if (typeof payload.exp === "number" && payload.exp * 1000 < Date.now()) return null;
+    return {
+      id: String(payload.id),
+      nome_loja: String(payload.nome_loja ?? ""),
+      email_dono: String(payload.email_dono ?? ""),
+      status_pagamento: String(payload.status_pagamento ?? ""),
+      data_vencimento: (payload.data_vencimento as string | null | undefined) ?? null,
+      plano: (payload.plano as string | null | undefined) ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// Lê a sessão salva no cookie (null se não estiver logado/expirada)
 export function getSessao(): Sessao | null {
   if (typeof document === "undefined") return null;
   const m = document.cookie.match(
     new RegExp("(?:^|;\\s*)" + COOKIE_SESSAO + "=([^;]+)")
   );
   if (!m) return null;
+  const valor = decodeURIComponent(m[1]);
+  const jwt = decodificarJwtSessao(valor);
+  if (jwt) return jwt;
+  // Compatibilidade legada temporária: cookie JSON antigo
   try {
-    return JSON.parse(decodeURIComponent(m[1])) as Sessao;
+    const legado = JSON.parse(valor) as Sessao;
+    return legado?.id ? legado : null;
   } catch {
     return null;
   }
 }
 
-// Salva a sessão no cookie (7 dias)
-export function salvarSessao(s: Sessao): void {
-  document.cookie =
-    COOKIE_SESSAO +
-    "=" +
-    encodeURIComponent(JSON.stringify(s)) +
-    "; path=/; max-age=" +
-    60 * 60 * 24 * 7;
+// Sessão é emitida/rotacionada apenas pelo servidor. Esta função mantém
+// compatibilidade com chamadas antigas sem permitir forjar autenticação.
+export function salvarSessao(_s: Sessao): void {
+  // Sessão é emitida pelo servidor. Atualiza cookie JWT a partir do banco.
+  if (typeof window !== "undefined") {
+    void fetch("/api/auth/refresh", { method: "POST", credentials: "same-origin" }).catch(() => {});
+  }
 }
 
-// Apaga o cookie (logout)
 export function limparSessao(): void {
-  document.cookie = COOKIE_SESSAO + "=; path=/; max-age=0";
+  document.cookie = COOKIE_SESSAO + "=; path=/; max-age=0; SameSite=Lax";
 }
 
 // Hash SHA-256 em hexadecimal (usado ao criar loja no /admin)

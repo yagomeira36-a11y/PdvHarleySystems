@@ -3,6 +3,7 @@ import type { KeyObject } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { NextRequest, NextResponse } from "next/server";
 import { validarBytesEscPos } from "@/lib/escpos";
+import { obterSessaoRequest } from "@/lib/session";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -45,8 +46,7 @@ function shortText(value: unknown, maxLength: number): value is string {
   return typeof value === "string" && value.length <= maxLength && !CONTROL_CHARACTERS.test(value);
 }
 
-function validateRequestOrigin(req: NextRequest, isPost: boolean): void {
-  // Permitir o PDV em localhost, Vercel ou outro domínio HTTPS.
+async function validateRequestOrigin(req: NextRequest, isPost: boolean): Promise<void> {
   const url = req.nextUrl;
   const origin = req.headers.get("origin");
   const host = req.headers.get("host");
@@ -67,20 +67,8 @@ function validateRequestOrigin(req: NextRequest, isPost: boolean): void {
     throw new RouteError(403, "QZ permitido somente com requisição de mesma origem.");
   }
 
-  try {
-    const cookie = req.cookies.get("loja_sessao")?.value;
-    if (!cookie || cookie.length > 8192) throw new Error();
-    let session: unknown;
-    try {
-      session = JSON.parse(cookie); // NextRequest já decodifica cookies.
-    } catch {
-      session = JSON.parse(decodeURIComponent(cookie));
-    }
-    if (
-      !isObject(session) || typeof session.id !== "string" || !UUID.test(session.id) ||
-      session.status_pagamento !== "ativo"
-    ) throw new Error();
-  } catch {
+  const session = await obterSessaoRequest(req);
+  if (!session || !UUID.test(session.id) || session.status_pagamento !== "ativo") {
     throw new RouteError(403, "Sessão local ausente, inválida ou bloqueada.");
   }
 }
@@ -261,7 +249,7 @@ function failure(error: unknown): RouteError {
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
   try {
-    validateRequestOrigin(req, false);
+    await validateRequestOrigin(req, false);
     const config = await configuration();
     if (!config) return json({ configured: false, certificate: null, message: SETUP_MESSAGE });
     return json({
@@ -277,7 +265,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
-    validateRequestOrigin(req, true);
+    await validateRequestOrigin(req, true);
     const body = await readJsonLimited(req);
     requireValid(isObject(body) && onlyKeys(body, ["request"]) && typeof body.request === "string" && body.request.length > 0);
     const config = await configuration();

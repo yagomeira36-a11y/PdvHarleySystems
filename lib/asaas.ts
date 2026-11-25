@@ -190,7 +190,7 @@ function hojeISO(): string {
 }
 
 // ============================================================
-// CRIAR ASSINATURA (R$ 49,99/mês)
+// CRIAR ASSINATURA (R$ 74,90/mês)
 // ============================================================
 export async function criarAssinaturaAsaas(dados: {
   clienteId: string;

@@ -16,3 +16,10 @@ out/
 # Arquivos de sistema
 .DS_Store
 Thumbs.db
+
+# Seguranca/artefatos locais
+.env
+.env.production
+clean-*.log
+build-desktop.log
+*.msi

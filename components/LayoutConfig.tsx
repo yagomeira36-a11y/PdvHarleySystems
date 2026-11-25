@@ -10,6 +10,7 @@
 // ============================================================
 import { useEffect, useRef, useState } from "react";
 import { getSessao, getSupabase } from "@/lib/supabase";
+import { validarImagemUpload } from "@/lib/upload-image";
 import {
   LayoutConfig as TipoLayout,
   LAYOUT_PADRAO,
@@ -60,64 +61,49 @@ export default function LayoutConfig({
   // ============================================================
   // ESCOLHER IMAGEM DA LOJA (logo)
   // ============================================================
-  function escolherImagem(e: React.ChangeEvent<HTMLInputElement>) {
+  async function escolherImagem(e: React.ChangeEvent<HTMLInputElement>) {
     const arquivo = e.target.files?.[0];
     setErroImagem(null);
     if (!arquivo) return;
-    if (!arquivo.type.startsWith("image/")) {
-      setErroImagem("Escolha um arquivo de imagem (JPG, PNG...).");
-      return;
-    }
-    if (arquivo.size > 1.5 * 1024 * 1024) {
-      setErroImagem("Imagem muito grande. Use uma de até 1,5 MB.");
-      return;
-    }
+    const validacao = await validarImagemUpload(arquivo, 1.5);
+    if (!validacao.ok) { setErroImagem(validacao.erro); return; }
     const leitor = new FileReader();
     leitor.onload = () => setLogo(String(leitor.result));
     leitor.readAsDataURL(arquivo);
   }
 
   // ============================================================
+  // ESCOLHER IMAGEM DE FUNDO (banner da área principal)  // ============================================================
   // ESCOLHER IMAGEM DE FUNDO (banner da área principal)
   // ============================================================
-  function escolherFundo(e: React.ChangeEvent<HTMLInputElement>) {
+  async function escolherFundo(e: React.ChangeEvent<HTMLInputElement>) {
     const arquivo = e.target.files?.[0];
     setErroFundo(null);
     if (!arquivo) return;
-    if (!arquivo.type.startsWith("image/")) {
-      setErroFundo("Escolha um arquivo de imagem (JPG, PNG...).");
-      return;
-    }
-    if (arquivo.size > 2 * 1024 * 1024) {
-      setErroFundo("Imagem muito grande. Use uma de até 2 MB.");
-      return;
-    }
+    const validacao = await validarImagemUpload(arquivo, 2);
+    if (!validacao.ok) { setErroFundo(validacao.erro); return; }
     const leitor = new FileReader();
     leitor.onload = () => setFundo(String(leitor.result));
     leitor.readAsDataURL(arquivo);
   }
 
   // ============================================================
+  // ESCOLHER IMAGEM DO CARDÁPIO (aberta pelo botão CARDÁPIO)  // ============================================================
   // ESCOLHER IMAGEM DO CARDÁPIO (aberta pelo botão CARDÁPIO)
   // ============================================================
-  function escolherCardapio(e: React.ChangeEvent<HTMLInputElement>) {
+  async function escolherCardapio(e: React.ChangeEvent<HTMLInputElement>) {
     const arquivo = e.target.files?.[0];
     setErroCardapio(null);
     if (!arquivo) return;
-    if (!arquivo.type.startsWith("image/")) {
-      setErroCardapio("Escolha um arquivo de imagem (JPG, PNG...).");
-      return;
-    }
-    if (arquivo.size > 2 * 1024 * 1024) {
-      setErroCardapio("Imagem muito grande. Use uma de até 2 MB.");
-      return;
-    }
+    const validacao = await validarImagemUpload(arquivo, 2);
+    if (!validacao.ok) { setErroCardapio(validacao.erro); return; }
     const leitor = new FileReader();
     leitor.onload = () => setCardapio(String(leitor.result));
     leitor.readAsDataURL(arquivo);
   }
 
   // ============================================================
+  // MENUS DO LATERAL (mostrar/esconder e reordenar)  // ============================================================
   // MENUS DO LATERAL (mostrar/esconder e reordenar)
   // ============================================================
   function alternarVisivel(id: MenuId) {
